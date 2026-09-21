@@ -17,7 +17,7 @@ if command -v wg &> /dev/null; then
     echo "=== [ПРОПУСК] WireGuard уже установлен в системе ==="
 else
     echo "=== Установка WireGuard и системных утилит ==="
-    apt-get update && apt-get install -y wireguard wireguard-tools
+    apt-get update && apt-get install -y wireguard wireguard-tools resolvconf
     echo "WireGuard успешно установлен."
 fi
 
