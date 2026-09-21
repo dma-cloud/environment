@@ -6,4 +6,4 @@ cname=ollama.lab,undergound-02.lab
 
 cname=registry.lab,undergound-03.lab
 cname=mirror.registry.lab,undergound-03.lab
-cname=apt3.registry.lab,undergound-03.lab
+cname=apt.registry.lab,undergound-03.lab
