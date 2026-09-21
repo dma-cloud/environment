@@ -24,10 +24,10 @@ read -p "Введите ветку GitHub (Branch) [дефолт: master]: " INP
 BRANCH=${INPUT_BRANCH:-"master"}
 
 # ИСПРАВЛЕНО: Добавлен знак $ перед переменными, исправлен хост raw-файлов GitHub
-BASE_URL="https://raw.githubusercontent.com/{GITHUB_USER}/${GITHUB_REPO}/refs/heads/${BRANCH}/scripts"
+BASE_URL="https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/refs/heads/${BRANCH}/scripts"
 
 echo "----------------------------------------------------------"
-echo "Источник: https://github.com/{GITHUB_USER}/${GITHUB_REPO}/tree/${BRANCH}"
+echo "Источник: https://github.com/${GITHUB_USER}/${GITHUB_REPO}/tree/${BRANCH}"
 echo "Загрузка модулей из папки /scripts..."
 echo "----------------------------------------------------------"
 sleep 1 # Пауза, чтобы пользователь успел прочитать информацию
