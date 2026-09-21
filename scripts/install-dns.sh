@@ -74,7 +74,7 @@ fi
 # 5. СКАЧИВАНИЕ CNAME С GITHUB
 echo ""
 echo "=== Загрузка статических CNAME-записей из GitOps... ==="
-URL_CNAME="https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${BRANCH}/refs/heads/dns-config/cname.map"
+URL_CNAME="https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/refs/heads/${BRANCH}/dns-config/cname.map"
 
 if curl -s -f -L "$URL_CNAME" -o "$FINAL_CNAME"; then
     echo -e "${GREEN}CNAME-алиасы успешно импортированы в $FINAL_CNAME${NC}"
