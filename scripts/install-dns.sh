@@ -134,23 +134,6 @@ else
     exit 1
 fi
 
-# ... (Предыдущий код генерации dnsmasq.conf и проверки портов) ...
-
-# 7. ТЕСТИРОВАНИЕ И ПЕРЕЗАПУСК СЛУЖБЫ
-echo "=== Проверка синтаксиса и запуск... ==="
-if dnsmasq --test; then
-    if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
-        systemctl stop systemd-resolved || true
-        systemctl disable systemd-resolved || true
-    fi
-    systemctl restart dnsmasq
-    systemctl enable dnsmasq
-    echo -e "${GREEN}🎉 DNS-сервер успешно запущен! Зона .${DOMAIN_ZONE} обслуживается.${NC}"
-else
-    echo -e "${RED}❌ Ошибка: Конфигурация dnsmasq содержит критические ошибки!${NC}"
-    exit 1
-fi
-
 # ==============================================================================
 # 🚀 НОВЫЙ БЛОК: АВТОМАТИЧЕСКАЯ НАСТРОЙКА GITOPS CRON ДЛЯ CNAME
 # ==============================================================================
