@@ -15,7 +15,7 @@
 sudo apt update && sudo apt install gnupg curl -y
 
 # Скачивание стабильного бинарника SOPS v3.13.3
-curl -LO https://github.com
+curl -LO https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64
 
 # Перемещение бинарника в системный PATH
 sudo mv sops-v3.13.3.linux.amd64 /usr/local/bin/sops
