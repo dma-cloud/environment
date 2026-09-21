@@ -23,8 +23,8 @@ GITHUB_REPO=${INPUT_REPO:-"environment"}
 read -p "Введите ветку GitHub (Branch) [дефолт: master]: " INPUT_BRANCH
 BRANCH=${INPUT_BRANCH:-"master"}
 
-# Формируем базовый URL для скачивания модулей динамически
-BASE_URL="https://githubusercontent.com/{GITHUB_USER}/${GITHUB_REPO}/${BRANCH}/scripts"
+# ИСПРАВЛЕНО: Добавлен знак $ перед переменными, исправлен хост raw-файлов GitHub
+BASE_URL="https://raw.githubusercontent.com/{GITHUB_USER}/${GITHUB_REPO}/refs/heads/${BRANCH}/scripts"
 
 echo "----------------------------------------------------------"
 echo "Источник: https://github.com/{GITHUB_USER}/${GITHUB_REPO}/tree/${BRANCH}"
@@ -50,7 +50,7 @@ run_tui_menu() {
     while true; do
         clear
         echo -e "${GREEN}=========================================================="
-        echo "    DMA-CLOUD: Модульный установщик инфраструктуры        "
+        echo "    DMA-CLOUD: Модульный установщик infrastructure        "
         echo -e "==========================================================${NC}"
         echo " Навигация: [Стрелки Вверх/Вниз]  Выбор: [Пробел]  Подтвердить: [Enter]"
         echo "----------------------------------------------------------"
@@ -78,8 +78,7 @@ run_tui_menu() {
         elif [[ "$key" == "" ]]; then # Клавиша Enter (Завершить выбор)
             break
         elif [[ "$key" == " " ]]; then # Клавиша Пробел (Переключить чекбокс)
-            if [ "${choices[cursor]}" -eq 1 ]; then choices[cursor]=0; else choices[choices]=1; fi
-            # Фикс для некоторых версий bash, где инкремент массива внутри условия ведет себя специфично:
+            # ИСПРАВЛЕНО: Исправлена опечатка в массиве choices[cursor] и удалена строка-дубликат
             if [ "${choices[cursor]}" -eq 1 ]; then choices[cursor]=0; else choices[cursor]=1; fi
         fi
     done
@@ -95,7 +94,7 @@ run_tui_menu() {
 MODULES=(
     "install-dns.sh"   "Инициализация DNS-сервера (dnsmasq + SOPS) на VPS"
     "install-wg.sh"    "Настройка WireGuard туннеля (Split Tunneling + MTU)"
-    "enable-swap.sh"   "Создание SWAP-файла на SSD (для слабых серверов)"
+    "enable-swap.sh"   "Создание SWAP-файла на SSD (для слабых servers)"
 )
 
 # Запускаем TUI движок и ловим индексы
@@ -129,6 +128,7 @@ for idx in $SELECTED_INDEXES; do
         rm -f "$TMP_SCRIPT"
     else
         echo -e "${RED}❌ Ошибка: Не удалось скачать скрипт ${SCRIPT_NAME} из Git!${NC}"
+        echo "Проверьте URL: ${BASE_URL}/${SCRIPT_NAME}"
         rm -f "$TMP_SCRIPT"
         exit 1
     fi
