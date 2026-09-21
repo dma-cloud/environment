@@ -65,11 +65,11 @@ run_tui_menu() {
         echo "----------------------------------------------------------" >&2
 
         # Считываем нажатие клавиши
-        read -rsn1 key < /dev/tty
+        IFS= read -rsn1 key < /dev/tty
         
         # Обработка управляющих escape-последовательностей (Стрелки)
         if [[ "$key" == $'\x1b' ]]; then
-            read -rsn2 -t 0.1 key_arrows < /dev/tty || true
+            IFS= read -rsn2 -t 0.1 key_arrows < /dev/tty || true
             if [[ "$key_arrows" == "[A" ]]; then # Вверх
                 cursor=$((cursor - 1))
                 if [ "$cursor" -lt 0 ]; then cursor=$((num_mods - 1)); fi
