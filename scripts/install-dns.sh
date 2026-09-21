@@ -133,3 +133,55 @@ else
     echo -e "${RED}❌ Ошибка: Конфигурация dnsmasq содержит критические ошибки!${NC}"
     exit 1
 fi
+
+# ... (Предыдущий код генерации dnsmasq.conf и проверки портов) ...
+
+# 7. ТЕСТИРОВАНИЕ И ПЕРЕЗАПУСК СЛУЖБЫ
+echo "=== Проверка синтаксиса и запуск... ==="
+if dnsmasq --test; then
+    if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+        systemctl stop systemd-resolved || true
+        systemctl disable systemd-resolved || true
+    fi
+    systemctl restart dnsmasq
+    systemctl enable dnsmasq
+    echo -e "${GREEN}🎉 DNS-сервер успешно запущен! Зона .${DOMAIN_ZONE} обслуживается.${NC}"
+else
+    echo -e "${RED}❌ Ошибка: Конфигурация dnsmasq содержит критические ошибки!${NC}"
+    exit 1
+fi
+
+# ==============================================================================
+# 🚀 НОВЫЙ БЛОК: АВТОМАТИЧЕСКАЯ НАСТРОЙКА GITOPS CRON ДЛЯ CNAME
+# ==============================================================================
+echo ""
+echo -e "${YELLOW}=== Настройка автоматической синхронизации CNAME (Cron) ===${NC}"
+
+# 1. Создаем рабочую папку и скачиваем туда наш экономный синхронизатор
+SYNC_DIR="/opt/dns-sync"
+SYNC_SCRIPT="${SYNC_DIR}/sync-dns.sh"
+mkdir -p "$SYNC_DIR"
+
+URL_SYNC="https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/refs/heads/${BRANCH}/scripts/sync-dns.sh"
+echo "Скачивание крон-скрипта из Git..."
+
+if curl -s -f -L "$URL_SYNC" -o "$SYNC_SCRIPT"; then
+    chmod +x "$SYNC_SCRIPT"
+    echo -e "${GREEN}Синхронизатор успешно сохранен в $SYNC_SCRIPT${NC}"
+else
+    echo -e "${RED}⚠️ Ошибка: Не удалось скачать sync-dns.sh из Git! Пропишите крон вручную.${NC}"
+    exit 0 # Не валим весь инсталл из-за крона
+fi
+
+# 2. Безопасно добавляем задачу в crontab без дублирования строк
+CRON_JOB="*/5 * * * * ${SYNC_SCRIPT} >> /var/log/dns-sync.log 2>&1"
+
+# Проверяем, нет ли уже такой задачи в кроне у root
+if crontab -l 2>/dev/null | grep -q "${SYNC_SCRIPT}"; then
+    echo "✅ Задача автоматической синхронизации уже присутствует в crontab."
+else
+    # Берем текущий крон, дописываем новую строку и отдаем обратно планировщику
+    (crontab -l 2>/dev/null; echo "$CRON_JOB") | crontab -
+    echo -e "${GREEN}🎉 Скрипт синхронизации успешно добавлен в crontab на каждые 5 минут!${NC}"
+fi
+echo "----------------------------------------------------------"
