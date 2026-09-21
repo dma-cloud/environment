@@ -11,28 +11,26 @@ echo "=========================================================="
 echo "    Конфигурация источника GitOps (GitHub)               "
 echo "=========================================================="
 
-# 1. Запрашиваем имя пользователя/организации с подстановкой дефолта
+# 1. Запрашиваем параметры с умными дефолтами
 read -p "Введите GitHub User/Org [дефолт: dma-cloud]: " INPUT_USER
 GITHUB_USER=${INPUT_USER:-"dma-cloud"}
 
-# 2. Запрашиваем имя репозитория
 read -p "Введите GitHub Repository [дефолт: environment]: " INPUT_REPO
 GITHUB_REPO=${INPUT_REPO:-"environment"}
 
-# 3. Запрашиваем имя ветки
 read -p "Введите ветку GitHub (Branch) [дефолт: master]: " INPUT_BRANCH
 BRANCH=${INPUT_BRANCH:-"master"}
 
-# ИСПРАВЛЕНО: Добавлен знак $ перед переменными, исправлен хост raw-файлов GitHub
+# Формируем базовый URL для скачивания модулей динамически
 BASE_URL="https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/refs/heads/${BRANCH}/scripts"
 
 echo "----------------------------------------------------------"
 echo "Источник: https://github.com/${GITHUB_USER}/${GITHUB_REPO}/tree/${BRANCH}"
 echo "Загрузка модулей из папки /scripts..."
 echo "----------------------------------------------------------"
-sleep 1 # Пауза, чтобы пользователь успел прочитать информацию
+sleep 1 # Пауза для чтения информации
 
-# Цвета для интерфейса
+# Цвета для TUI
 GREEN='\033[0;32m' && YELLOW='\033[1;33m' && RED='\033[0;31m' && NC='\033[0m'
 
 # ==============================================================================
@@ -44,13 +42,13 @@ run_tui_menu() {
     local choices=()
     local cursor=0
     
-    # Инициализируем массив состояний чекбоксов нулями
+    # Заполняем массив состояний нулями
     for ((i=0; i<num_mods; i++)); do choices+=(0); done
 
     while true; do
         clear
         echo -e "${GREEN}=========================================================="
-        echo "    DMA-CLOUD: Модульный установщик infrastructure        "
+        echo "    DMA-CLOUD: Модульный установщик инфраструктуры        "
         echo -e "==========================================================${NC}"
         echo " Навигация: [Стрелки Вверх/Вниз]  Выбор: [Пробел]  Подтвердить: [Enter]"
         echo "----------------------------------------------------------"
@@ -66,38 +64,46 @@ run_tui_menu() {
         done
         echo "----------------------------------------------------------"
 
-        # Читаем нажатия клавиш
+        # Считываем нажатие клавиши
         read -rsn1 key
+        
+        # Обработка управляющих escape-последовательностей (Стрелки)
         if [[ "$key" == $'\x1b' ]]; then
-            read -rsn2 key
-            if [[ "$key" == "[A" ]]; then # Стрелка Вверх
-                ((cursor--)); if [ "$cursor" -lt 0 ]; then cursor=$((num_mods - 1)); fi
-            elif [[ "$key" == "[B" ]]; then # Стрелка Вниз
-                ((cursor++)); if [ "$cursor" -ge "$num_mods" ]; then cursor=0; fi
+            read -rsn2 -t 0.1 key_arrows || true
+            if [[ "$key_arrows" == "[A" ]]; then # Вверх
+                ((cursor--))
+                if [ "$cursor" -lt 0 ]; then cursor=$((num_mods - 1)); fi
+            elif [[ "$key_arrows" == "[B" ]]; then # Вниз
+                ((cursor++))
+                if [ "$cursor" -ge "$num_mods" ]; then cursor=0; fi
             fi
-        elif [[ "$key" == "" ]]; then # Клавиша Enter (Завершить выбор)
+        elif [[ "$key" == "" ]]; then # Клавиша Enter
             break
-        elif [[ "$key" == " " ]]; then # Клавиша Пробел (Переключить чекбокс)
-            # ИСПРАВЛЕНО: Исправлена опечатка в массиве choices[cursor] и удалена строка-дубликат
-            if [ "${choices[cursor]}" -eq 1 ]; then choices[cursor]=0; else choices[cursor]=1; fi
+        elif [[ "$key" == " " ]]; then # Клавиша Пробел
+            # ИСПРАВЛЕНО: Инвертируем состояние строго для выбранного индекса cursor
+            if [ "${choices[cursor]}" -eq 1 ]; then
+                choices[cursor]=0
+            else
+                choices[cursor]=1
+            fi
         fi
     done
 
-    # Возвращаем строку из индексов выбранных элементов через пробел
+    # Возвращаем строку индексов выбранных элементов
     for ((i=0; i<num_mods; i++)); do
         if [ "${choices[i]}" -eq 1 ]; then echo -n "$i "; fi
     done
 }
 # ==============================================================================
 
-# Наш список доступных модулей в папке /scripts (Имя_файла -> Описание в меню)
+# Доступные модули (Имя файла в Git -> Описание в интерфейсе)
 MODULES=(
     "install-dns.sh"   "Инициализация DNS-сервера (dnsmasq + SOPS) на VPS"
     "install-wg.sh"    "Настройка WireGuard туннеля (Split Tunneling + MTU)"
-    "enable-swap.sh"   "Создание SWAP-файла на SSD (для слабых servers)"
+    "enable-swap.sh"   "Создание SWAP-файла на SSD (для слабых серверов)"
 )
 
-# Запускаем TUI движок и ловим индексы
+# Запускаем движок
 SELECTED_INDEXES=$(run_tui_menu MODULES)
 
 if [ -z "$SELECTED_INDEXES" ]; then
@@ -108,7 +114,7 @@ fi
 clear
 echo -e "${YELLOW}=== Начинаем поочередную установку выбранных модулей ===${NC}\n"
 
-# Скачиваем и выполняем выбранные модули последовательно
+# Скачиваем и выполняем выбранные скрипты последовательно
 for idx in $SELECTED_INDEXES; do
     SCRIPT_NAME="${MODULES[idx*2]}"
     SCRIPT_DESC="${MODULES[idx*2+1]}"
@@ -119,16 +125,16 @@ for idx in $SELECTED_INDEXES; do
     TMP_SCRIPT=$(mktemp)
     if curl -s -f -L "${BASE_URL}/${SCRIPT_NAME}" -o "$TMP_SCRIPT"; then
         chmod +x "$TMP_SCRIPT"
-        # Передаем управление терминалом </dev/tty, чтобы внутренние read скрипта могли читать клавиатуру
+        # Направляем tty внутрь подскрипта, чтобы интерактивные read работали корректно
         if ! "$TMP_SCRIPT" </dev/tty; then
-            echo -e "${RED}❌ Ошибка при выполнении модуля $SCRIPT_NAME. Остановка общего процесса.${NC}"
+            echo -e "${RED}❌ Ошибка при выполнении модуля $SCRIPT_NAME. Остановка.${NC}"
             rm -f "$TMP_SCRIPT"
             exit 1
         fi
         rm -f "$TMP_SCRIPT"
     else
         echo -e "${RED}❌ Ошибка: Не удалось скачать скрипт ${SCRIPT_NAME} из Git!${NC}"
-        echo "Проверьте URL: ${BASE_URL}/${SCRIPT_NAME}"
+        echo "Проверьте путь: ${BASE_URL}/${SCRIPT_NAME}"
         rm -f "$TMP_SCRIPT"
         exit 1
     fi
