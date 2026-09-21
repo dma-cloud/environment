@@ -24,10 +24,10 @@ read -p "Введите ветку GitHub (Branch) [дефолт: master]: " INP
 BRANCH=${INPUT_BRANCH:-"master"}
 
 # Формируем базовый URL для скачивания модулей динамически
-BASE_URL="https://githubusercontent.com{GITHUB_USER}/${GITHUB_REPO}/${BRANCH}/scripts"
+BASE_URL="https://githubusercontent.com/{GITHUB_USER}/${GITHUB_REPO}/${BRANCH}/scripts"
 
 echo "----------------------------------------------------------"
-echo "Источник: https://github.com{GITHUB_USER}/${GITHUB_REPO}/tree/${BRANCH}"
+echo "Источник: https://github.com/{GITHUB_USER}/${GITHUB_REPO}/tree/${BRANCH}"
 echo "Загрузка модулей из папки /scripts..."
 echo "----------------------------------------------------------"
 sleep 1 # Пауза, чтобы пользователь успел прочитать информацию
