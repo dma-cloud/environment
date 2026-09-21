@@ -46,35 +46,35 @@ run_tui_menu() {
     for ((i=0; i<num_mods; i++)); do choices+=(0); done
 
     while true; do
-        clear
-        echo -e "${GREEN}=========================================================="
-        echo "    DMA-CLOUD: Модульный установщик инфраструктуры        "
-        echo -e "==========================================================${NC}"
-        echo " Навигация: [Стрелки Вверх/Вниз]  Выбор: [Пробел]  Подтвердить: [Enter]"
-        echo "----------------------------------------------------------"
+        clear >&2
+        echo -e "${GREEN}==========================================================" >&2
+        echo "    DMA-CLOUD: Модульный установщик инфраструктуры        " >&2
+        echo -e "==========================================================${NC}" >&2
+        echo " Навигация: [Стрелки Вверх/Вниз]  Выбор: [Пробел]  Подтвердить: [Enter]" >&2
+        echo "----------------------------------------------------------" >&2
         
         for ((i=0; i<num_mods; i++)); do
             local marker="[ ]"
             if [ "${choices[i]}" -eq 1 ]; then marker="[*]"; fi
             if [ "$i" -eq "$cursor" ]; then
-                echo -e "> \033[1;32m$marker ${mods[i*2+1]}\033[0m"
+                echo -e "> \033[1;32m$marker ${mods[i*2+1]}\033[0m" >&2
             else
-                echo "  $marker ${mods[i*2+1]}"
+                echo "  $marker ${mods[i*2+1]}" >&2
             fi
         done
-        echo "----------------------------------------------------------"
+        echo "----------------------------------------------------------" >&2
 
         # Считываем нажатие клавиши
-        read -rsn1 key
+        read -rsn1 key < /dev/tty
         
         # Обработка управляющих escape-последовательностей (Стрелки)
         if [[ "$key" == $'\x1b' ]]; then
-            read -rsn2 -t 0.1 key_arrows || true
+            read -rsn2 -t 0.1 key_arrows < /dev/tty || true
             if [[ "$key_arrows" == "[A" ]]; then # Вверх
-                ((cursor--))
+                cursor=$((cursor - 1))
                 if [ "$cursor" -lt 0 ]; then cursor=$((num_mods - 1)); fi
             elif [[ "$key_arrows" == "[B" ]]; then # Вниз
-                ((cursor++))
+                cursor=$((cursor + 1))
                 if [ "$cursor" -ge "$num_mods" ]; then cursor=0; fi
             fi
         elif [[ "$key" == "" ]]; then # Клавиша Enter
