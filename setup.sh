@@ -101,6 +101,7 @@ MODULES=(
     "install-dns.sh"   "Инициализация DNS-сервера (dnsmasq + SOPS) на VPS"
     "install-wg.sh"    "Настройка WireGuard туннеля (Split Tunneling + MTU)"
     "enable-swap.sh"   "Создание SWAP-файла на SSD (для слабых серверов)"
+    "update-a-records.sh"  "Ленивое обновление физической карты сети (A-записи)"
 )
 
 # Запускаем движок
