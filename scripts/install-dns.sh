@@ -114,7 +114,7 @@ domain=${DOMAIN_ZONE}
 
 # 6. ИСТОЧНИКИ ДАННЫХ (ДИНАМИЧЕСКИЕ A-ЗАПИСИ И СТАТИЧЕСКИЙ CNAME)
 addn-hosts=${FINAL_HOSTS}
-conf-file=${FINAL_CNAME}
+conf-dir=/etc/dnsmasq.d 
 EOF
 
 # 7. ТЕСТИРОВАНИЕ И ПЕРЕЗАПУСК СЛУЖБЫ

@@ -47,10 +47,10 @@ if curl -s -f -L "$URL_CNAME" -o "$TMP_CNAME"; then
     echo "$ONLINE_SHA" > "$CACHE_SHA_FILE"
     
     # Мягко отправляем SIGHUP dnsmasq для перечитывания CNAME в памяти на лету
-    if killall -HUP dnsmasq 2>/dev/null || pkill -HUP dnsmasq 2>/dev/null; then
-        echo "🎉 CNAME-алиасы в бункере успешно обновлены по внешнему признаку коммита!"
+    if systemctl restart dnsmasq 2>/dev/null || service dnsmasq restart 2>/dev/null; then
+        echo "🎉 Служба DNS успешно перезапущена. Все новые CNAME-алиасы активны!"
     else
-        echo "⚠️ Предупреждение: dnsmasq не запущен. Некому отправить SIGHUP."
+        echo "⚠️ Ошибка: Не удалось перезапустить dnsmasq. Возможно, служба не установлена."
     fi
 else
     echo "❌ Ошибка: Не удалось скачать cname.map, хотя коммит обновился."
