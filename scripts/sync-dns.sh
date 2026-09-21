@@ -7,7 +7,7 @@ GITHUB_REPO="environment"
 BRANCH="master"
 
 # Пути к файлам на сервере
-FINAL_CNAME="/etc/dnsmasq.cname"
+FINAL_CNAME="/etc/dnsmasq.d/cname.conf"
 CACHE_SHA_FILE="/opt/dns-sync/last_commit.sha"
 
 # 1. Запрашиваем только SHA последнего коммита через GitHub API (легковесный запрос)
