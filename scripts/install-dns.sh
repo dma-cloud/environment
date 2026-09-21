@@ -16,7 +16,7 @@ fi
 # Пути к системным файлам dnsmasq
 DNSMASQ_CONF="/etc/dnsmasq.conf"
 FINAL_HOSTS="/etc/dnsmasq.hosts"
-FINAL_CNAME="/etc/dnsmasq.cname"
+FINAL_CNAME="/etc/dnsmasq.d/cname.conf"
 
 # 1. Автоматический сбор всех IPv4 адресов системы
 echo "=== Анализ сетевых интерфейсов... ==="
@@ -146,25 +146,15 @@ SYNC_SCRIPT="${SYNC_DIR}/sync-dns.sh"
 mkdir -p "$SYNC_DIR"
 
 URL_SYNC="https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/refs/heads/${BRANCH}/scripts/sync-dns.sh"
-echo "Скачивание крон-скрипта из Git..."
+echo "Скачивание ${URL_SYNC}"
 
 if curl -s -f -L "$URL_SYNC" -o "$SYNC_SCRIPT"; then
     chmod +x "$SYNC_SCRIPT"
+    bash $SYNC_SCRIPT
     echo -e "${GREEN}Синхронизатор успешно сохранен в $SYNC_SCRIPT${NC}"
 else
     echo -e "${RED}⚠️ Ошибка: Не удалось скачать sync-dns.sh из Git! Пропишите крон вручную.${NC}"
     exit 0 # Не валим весь инсталл из-за крона
 fi
 
-# 2. Безопасно добавляем задачу в crontab без дублирования строк
-CRON_JOB="*/5 * * * * ${SYNC_SCRIPT} >> /var/log/dns-sync.log 2>&1"
 
-# Проверяем, нет ли уже такой задачи в кроне у root
-if crontab -l 2>/dev/null | grep -q "${SYNC_SCRIPT}"; then
-    echo "✅ Задача автоматической синхронизации уже присутствует в crontab."
-else
-    # Берем текущий крон, дописываем новую строку и отдаем обратно планировщику
-    (crontab -l 2>/dev/null; echo "$CRON_JOB") | crontab -
-    echo -e "${GREEN}🎉 Скрипт синхронизации успешно добавлен в crontab на каждые 5 минут!${NC}"
-fi
-echo "----------------------------------------------------------"

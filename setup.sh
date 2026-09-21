@@ -99,6 +99,7 @@ run_tui_menu() {
 # Доступные модули (Имя файла в Git -> Описание в интерфейсе)
 MODULES=(
     "install-dns.sh"   "Инициализация DNS-сервера (dnsmasq + SOPS) на VPS"
+    "sync-dns.sh"          "Принудительная синхронизация CNAME-алиасов из Git"
     "install-wg.sh"    "Настройка WireGuard туннеля (Split Tunneling + MTU)"
     "enable-swap.sh"   "Создание SWAP-файла на SSD (для слабых серверов)"
     "update-a-records.sh"  "Ленивое обновление физической карты сети (A-записи)"
