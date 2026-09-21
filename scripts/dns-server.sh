@@ -1,6 +1,11 @@
 #!/bin/bash
 set -e
 
+if [ "$EUID" -ne 0 ]; then
+    echo "❌ Ошибка: Запустите скрипт под root (su - или sudo bash)!"
+    exit 1
+fi
+
 apt update && apt install -y dnsmasq curl gnupg
 
 if command -v sops &> /dev/null; then
