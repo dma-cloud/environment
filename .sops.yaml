@@ -1,0 +1,3 @@
+creation_rules:
+  - path_regex: \.enc$
+    pgp: "91F578C9960B91781658858DCBDDEE5A7487FA67"
