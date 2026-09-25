@@ -1,9 +1,8 @@
-cname=git.lab,undergound-01.lab
-cname=ingress.lab,undergound-01.lab
-cname=dashboard.lab,undergound-01.lab
+cname=git.lab,underground-04.lab
+cname=ingress.lab,underground-04.lab
+cname=dashboard.lab,underground-04.lab
+cname=pgadmin.lab,underground-04.lab
 
-cname=ollama.lab,undergound-02.lab
-
-cname=registry.lab,undergound-03.lab
-cname=mirror.registry.lab,undergound-03.lab
-cname=apt.registry.lab,undergound-03.lab
+cname=registry.lab,underground-03.lab
+cname=mirror.registry.lab,underground-03.lab
+cname=apt.registry.lab,underground-03.lab

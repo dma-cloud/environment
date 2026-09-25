@@ -104,6 +104,10 @@ MODULES=(
     "enable-swap.sh"   "Создание SWAP-файла на SSD (для слабых серверов)"
     "update-a-records.sh"  "Ленивое обновление физической карты сети (A-записи)"
     "install-root-cert.sh" "Добавление корневого SSL-сертификата в доверенные ОС"
+    "install_docker.sh" "Устновка докера"
+    "configure-k3s-registry.sh" "конфигурация кеша в к3с"
+    "install-k3s-infra.sh" "Установка k3s infra"
+    "install-k3s-certs.sh" "Устновка https серта для *.lab"
 )
 
 # Запускаем движок

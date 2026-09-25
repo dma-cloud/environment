@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  # 1. NPM Кэш + Регистр (Слушает порт 4873)
+  npm-registry:
+    image: verdaccio/verdaccio:5
+    container_name: verdaccio-npm
+    user: "root" # Важно! Чтобы контейнер имел доступ на запись в /mnt/registry
+    ports:
+      - "4873:4873"
+    volumes:
+      # Привели к единому шаблону путей /mnt/registry/data/...
+      - /mnt/registry/verdaccio/storage:/verdaccio/storage
+      - /mnt/registry/verdaccio/plugins:/verdaccio/plugins
+    restart: always
+
+  # 2. Docker Registry v2 (Слушает порт 5000)
+  docker-registry:
+    image: registry:2
+    container_name: local-docker-registry
+    ports:
+      - "5000:5000"
+    environment:
+      REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /var/lib/registry
+    volumes:
+      - /mnt/registry/docker-registry:/var/lib/registry
+    restart: always
+
+  # 3. Go Proxy Athens (Слушает порт 3000)
+  go-registry:
+    image: gomods/athens:v0.13.0
+    container_name: athens-go
+    ports:
+      - "3000:3000"
+    environment:
+      - ATHENS_STORAGE_TYPE=disk
+      - ATHENS_DISK_STORAGE_ROOT=/var/lib/athens
+    volumes:
+      - /mnt/registry/go-registry:/var/lib/athens
+    restart: always
