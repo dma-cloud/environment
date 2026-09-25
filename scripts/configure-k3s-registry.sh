@@ -44,12 +44,12 @@ fi
 
 # 2. Создаем системную директорию для конфигурации k3s
 echo "[INFO] Подготовка директорий..."
-sudo mkdir -p /etc/rancher/k3s
+mkdir -p /etc/rancher/k3s
 
 # 3. Генерируем registries.yaml напрямую (минуя ручную правку файлов)
 echo "[INFO] Запись системной конфигурации containerd..."
 
-sudo tee /etc/rancher/k3s/registries.yaml > /dev/null <<EOF
+tee /etc/rancher/k3s/registries.yaml > /dev/null <<EOF
 mirrors:
   # Направляем все стандартные запросы к Docker Hub (docker.io) на ваш кэш
   "docker.io":
@@ -69,10 +69,10 @@ EOF
 # 4. Перезапускаем k3s службу для применения конфигурации
 echo "[INFO] Перезапуск контейнерного движка для применения настроек..."
 if systemctl is-active --quiet k3s; then
-    sudo systemctl restart k3s
+    systemctl restart k3s
     echo "[SUCCESS] Мастер-нода k3s успешно перенаправлена на кэш-сервер!"
 elif systemctl is-active --quiet k3s-agent; then
-    sudo systemctl restart k3s-agent
+    systemctl restart k3s-agent
     echo "[SUCCESS] Воркер-нода k3s успешно перенаправлена на кэш-сервер!"
 else
     echo "[WARNING] Служба k3s/k3s-agent не запущена. Настройки применятся при следующем старте."

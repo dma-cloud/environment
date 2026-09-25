@@ -17,22 +17,22 @@ fi
 
 # 2. Создаем структуру директорий на накопителе под кэши
 echo "[INFO] Создание папок для хранения данных на /mnt/registry/..."
-sudo mkdir -p /mnt/registry/verdaccio/storage
-sudo mkdir -p /mnt/registry/verdaccio/plugins
-sudo mkdir -p /mnt/registry/docker-registry
-sudo mkdir -p /mnt/registry/go-registry
+ mkdir -p /mnt/registry/verdaccio/storage
+ mkdir -p /mnt/registry/verdaccio/plugins
+ mkdir -p /mnt/registry/docker-registry
+ mkdir -p /mnt/registry/go-registry
 
 # Выставляем права, чтобы контейнеры могли писать на диск
-sudo chmod -R 777 /mnt/registry/
+ chmod -R 777 /mnt/registry/
 
 # 3. Разворачиваем Docker Compose стек напрямую (минуя создание файлов на диске)
 echo "[INFO] Запуск контейнеров кэширования с лимитами памяти..."
 
 # Переходим в /opt для стандартизации размещения
-sudo mkdir -p /opt/registry-cache
+ mkdir -p /opt/registry-cache
 cd /opt/registry-cache
 
-sudo tee docker-compose.yml > /dev/null <<EOF
+ tee docker-compose.yml > /dev/null <<EOF
 version: '3.8'
 
 services:
@@ -93,7 +93,7 @@ services:
 EOF
 
 # Запуск стека
-sudo docker compose up -d
+ docker compose up -d
 
 echo ""
 echo "[SUCCESS] Кэш-сервер успешно запущен!"
