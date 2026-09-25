@@ -3,7 +3,7 @@
 # Скрипт для интерактивной настройки инфраструктуры (PostgreSQL 17 + Redis + pgAdmin 4) в k3s
 # Разработано в рамках инфраструктуры dma-cloud/environment
 
-set -e
+set -euo pipefail
 
 echo "====================================================="
 echo "   Настройка инфраструктурного стека (k3s: infra)    "
@@ -15,31 +15,43 @@ if ! command -v kubectl &> /dev/null; then
     exit 1
 fi
 
+if ! command -v openssl &> /dev/null; then
+    echo "[ERROR] Утилита openssl не найдена. Установите OpenSSL для генерации паролей."
+    exit 1
+fi
+
 # Функция для получения или генерации пароля
 get_or_gen_password() {
     local prompt_text="$1"
     local user_input
     local generated_pass
+    local choice
 
-    echo "$prompt_text"
-    echo "1) Сгенерировать надежный случайный пароль автоматически"
-    echo "2) Ввести пароль вручную"
-    echo -n "Выберите вариант (1 или 2): "
-    read -r choice
+    printf '%s\n' "$prompt_text" >&2
+    printf '%s\n' \
+        "1) Сгенерировать надежный случайный пароль автоматически" \
+        "2) Ввести пароль вручную" >&2
+    printf '%s' "Выберите вариант (1 или 2): " >&2
+    if ! IFS= read -r choice; then
+        echo "[ERROR] Не удалось прочитать выбор." >&2
+        exit 1
+    fi
 
     if [ "$choice" = "1" ]; then
         generated_pass=$(openssl rand -base64 18)
-        echo "[INFO] Сгенерирован пароль: $generated_pass"
-        echo "$generated_pass"
+        printf '%s\n' "$generated_pass"
     elif [ "$choice" = "2" ]; then
-        echo -n "Введите пароль (символы скрыты): "
-        read -s user_input
-        echo ""
+        printf '%s' "Введите пароль (символы скрыты): " >&2
+        if ! IFS= read -r -s user_input; then
+            echo "[ERROR] Не удалось прочитать пароль." >&2
+            exit 1
+        fi
+        printf '\n' >&2
         if [ -z "$user_input" ]; then
             echo "[ERROR] Пароль не может быть пустым!" >&2
             exit 1
         fi
-        echo "$user_input"
+        printf '%s\n' "$user_input"
     else
         echo "[ERROR] Неверный выбор!" >&2
         exit 1
@@ -48,17 +60,32 @@ get_or_gen_password() {
 
 # 2. Интерактивный опрос пользователя (Без дефолтных значений)
 echo "[Настройка учетных данных pgAdmin 4]"
-echo -n "Введите Email администратора для входа в pgAdmin: "
-read -r PGADMIN_EMAIL
+printf '%s' "Введите Email администратора для входа в pgAdmin: "
+if ! IFS= read -r PGADMIN_EMAIL; then
+    echo "[ERROR] Не удалось прочитать Email."
+    exit 1
+fi
 if [ -z "$PGADMIN_EMAIL" ]; then
     echo "[ERROR] Email не может быть пустым!"
     exit 1
 fi
+if [[ ! "$PGADMIN_EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+    echo "[ERROR] Введите корректный Email."
+    exit 1
+fi
 
-echo -n "Введите доменное имя для pgAdmin (например, pgadmin.lab): "
-read -r PGADMIN_DOMAIN
+printf '%s' "Введите доменное имя для pgAdmin (например, pgadmin.lab): "
+if ! IFS= read -r PGADMIN_DOMAIN; then
+    echo "[ERROR] Не удалось прочитать доменное имя."
+    exit 1
+fi
 if [ -z "$PGADMIN_DOMAIN" ]; then
     echo "[ERROR] Доменное имя не может быть пустым!"
+    exit 1
+fi
+if (( ${#PGADMIN_DOMAIN} > 253 )) ||
+    [[ ! "$PGADMIN_DOMAIN" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$ ]]; then
+    echo "[ERROR] Введите корректное доменное имя (DNS hostname)."
     exit 1
 fi
 
@@ -87,6 +114,7 @@ kubectl create namespace infra --dry-run=client -o yaml | kubectl apply -f -
 echo "[INFO] Создание безопасных секретов в Kubernetes..."
 kubectl create secret generic postgres-infra-secrets \
   --namespace=infra \
+  --from-literal="pgadmin-email=$PGADMIN_EMAIL" \
   --from-literal=postgres-password="$POSTGRES_PASS" \
   --from-literal=gitlab-db-password="$GITLAB_DB_PASS" \
   --from-literal=gitlab-root-password="$GITLAB_ROOT_PASS" \
@@ -230,7 +258,10 @@ spec:
           name: http
         env:
         - name: PGADMIN_DEFAULT_EMAIL
-          value: "$PGADMIN_EMAIL"
+          valueFrom:
+            secretKeyRef:
+              name: postgres-infra-secrets
+              key: pgadmin-email
         - name: PGADMIN_DEFAULT_PASSWORD
           valueFrom:
             secretKeyRef:
@@ -275,5 +306,6 @@ EOF
 
 echo ""
 echo "[SUCCESS] Полный стек (PostgreSQL 17 + Redis + pgAdmin 4) развернут!"
-echo "После запуска подов веб-интерфейс будет доступен по адресу: https://$PGADMIN_DOMAIN"
+echo "После запуска подов веб-интерфейс будет доступен по адресу: http://$PGADMIN_DOMAIN"
+echo "Для HTTPS настройте TLS в Ingress."
 echo "Логин: $PGADMIN_EMAIL"
