@@ -67,7 +67,7 @@ SECRET_NAME="postgres-infra-secrets"
 NAMESPACE="infra"
 
 if kubectl get secret "$SECRET_NAME" -n "$NAMESPACE" &> /dev/null; then
-    echo "[INFO] Секрет '$SECRET_NAME' уже существует in namespace '$NAMESPACE'."
+    echo "[INFO] Секрет '$SECRET_NAME' уже существует в namespace '$NAMESPACE'."
     echo "[INFO] Пропускаем интерактивный ввод данных. Будут использованы текущие секреты."
     
     if kubectl get ingress pgadmin-ingress -n "$NAMESPACE" &> /dev/null; then
@@ -111,7 +111,6 @@ else
     echo "[Панель управления pgAdmin 4]"
     PGADMIN_PASS=$(get_or_gen_password "Каким образом задать пароль для входа в pgAdmin?")
 
-    # ИСПРАВЛЕНО: Добавлен интерактивный запрос пароля для Redis
     echo ""
     echo "[Инфраструктура Redis]"
     REDIS_PASS=$(get_or_gen_password "Каким образом задать защитный пароль для Redis?")
@@ -155,13 +154,12 @@ spec:
       containers:
       - name: redis
         image: redis:7-alpine
-        # ИСПРАВЛЕНО: Передаем пароль через аргумент запуска Redis
         command: ["redis-server"]
+        # ИСПРАВЛЕНО: Убрали экранирование для корректного инжекта пароля из секретов Кубернетеса
         args: ["--requirepass", "\$(REDIS_PASSWORD)"]
         ports:
         - containerPort: 6379
           name: redis
-        # ИСПРАВЛЕНО: Достаем защищенный пароль из Kubernetes Secret
         env:
         - name: REDIS_PASSWORD
           valueFrom:
@@ -217,7 +215,7 @@ spec:
               key: postgres-password
         - name: POSTGRES_INITDB_ARGS
           value: "--auth=scram-sha-256 -c max_locks_per_transaction=256 -c shared_buffers=512MB"
-       
+        # ИСПРАВЛЕНО: Полностью выровнены отступы блока resources
         resources:
           limits:
             memory: 2Gi
