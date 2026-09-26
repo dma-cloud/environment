@@ -1,6 +1,6 @@
 #!/bin/bash
 # Модуль установки GitLab Community Edition (CE) в Namespace 'devops'
-# ИСПОЛЬЗУЮТСЯ ТОЛЬКО ЧИСТЫЕ KUBERNETES MANIFESTS (БЕЗ HELM)
+# ИСПОЛЬЗУЮТСЯ ТОЛЬКО ЧИСТЫЕ KUBERNETES MANIFESTS (ЧЕРЕЗ CONFIGMAP)
 
 set -euo pipefail
 
@@ -11,7 +11,7 @@ RED='\033[0;31m'
 NC='\033[0m'
 
 echo "====================================================="
-echo "   Настройка GitLab CE через Кубернетис Манифесты    "
+echo "   Настройка GitLab CE через ConfigMap и Манифесты   "
 echo "====================================================="
 
 # 1. Проверяем наличие утилит
@@ -32,9 +32,9 @@ REDIS_HOST="redis-infra-service.infra.svc.cluster.local"
 echo "[INFO] Проверка пространства имен '${NAMESPACE}'..."
 kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
 
-# 3. Синхронизация и генерация данных (Проверяем наличие секретов)
+# 3. Синхронизация и генерация секретов
 if kubectl get secret "${SECRET_NAME}" -n "${NAMESPACE}" &> /dev/null; then
-    echo "[INFO] Секрет '${SECRET_NAME}' уже существует. Извлекаем данные для деплоя..."
+    echo "[INFO] Секрет '${SECRET_NAME}' уже существует. Извлекаем данные..."
     
     GITLAB_DOMAIN=$(kubectl get secret "${SECRET_NAME}" -n "${NAMESPACE}" -o jsonpath='{.data.gitlab-domain}' | base64 --decode)
     SMTP_USER=$(kubectl get secret "${SECRET_NAME}" -n "${NAMESPACE}" -o jsonpath='{.data.smtp-username}' | base64 --decode)
@@ -50,18 +50,15 @@ else
     if ! IFS= read -r GITLAB_DOMAIN; then echo "[ERROR] Ошибка чтения."; exit 1; fi
     GITLAB_DOMAIN=${GITLAB_DOMAIN:-"gitlab.lab"}
 
-    # Проверяем, есть ли готовый секрет инфраструктуры
     if kubectl get secret "${INFRA_SECRET}" -n "${INFRA_NS}" &> /dev/null; then
         echo "[INFO] Импортируем пароли СУБД и Redis..."
         
         DB_USER="gitlab"
         DB_NAME="gitlabhq_production"
         
-        # Расшифровываем переменные напрямую в Bash для подстановки в Omnibus-конфиг
         DB_PASS=$(kubectl get secret "${INFRA_SECRET}" -n "${INFRA_NS}" -o jsonpath='{.data.gitlab-db-password}' | base64 --decode)
         REDIS_PASS=$(kubectl get secret "${INFRA_SECRET}" -n "${INFRA_NS}" -o jsonpath='{.data.redis-password}' | base64 --decode)
         
-        # Запрашиваем почту Яндекса
         printf '%s' "Введите email Яндекс для SMTP (например, user@yandex.ru): "
         if ! IFS= read -r SMTP_USER; then echo "[ERROR] Ошибка чтения."; exit 1; fi
         
@@ -69,7 +66,6 @@ else
         if ! IFS= read -r -s SMTP_PASS; then echo "[ERROR] Ошибка чтения."; exit 1; fi
         printf '\n'
         
-        # Создаем секрет "на всякий случай" для хранения в namespace devops (для GitOps-консистентности)
         kubectl create secret generic "$SECRET_NAME" \
           --namespace="$NAMESPACE" \
           --from-literal=smtp-username="$SMTP_USER" \
@@ -82,16 +78,58 @@ else
           --dry-run=client -o yaml | kubectl apply -f -
     else
         echo "[ERROR] Секрет базы данных '${INFRA_SECRET}' в пространстве '${INFRA_NS}' не найден!"
-        echo "Сначала разверните базовую инфраструктуру postgres/redis."
         exit 1
     fi
 fi
 
-# 4. Развертывание GitLab CE через чистый декларативный манифест
+# 4. Применяем конфигурацию и манифесты
 echo "[INFO] Применение манифестов GitLab CE в Kubernetes..."
 
-# Переменные Bash подставляются прямо внутрь строки конфигурации Omnibus на этапе генерации
 kubectl apply -f - <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gitlab-config
+  namespace: ${NAMESPACE}
+data:
+  # Наш вынесенный, чистый конфигурационный файл gitlab.rb
+  gitlab.rb: |
+    external_url 'http://${GITLAB_DOMAIN}'
+    
+    # Отключение встроенных баз и кэша
+    postgresql['enable'] = false
+    redis['enable'] = false
+    
+    # Настройка веб-сервера
+    nginx['listen_port'] = 80
+    nginx['listen_https'] = false
+    
+    # Подключение к PostgreSQL (infra)
+    gitlab_rails['db_adapter'] = 'postgresql'
+    gitlab_rails['db_encoding'] = 'utf8'
+    gitlab_rails['db_host'] = '${DB_HOST}'
+    gitlab_rails['db_port'] = 5432
+    gitlab_rails['db_username'] = '${DB_USER}'
+    gitlab_rails['db_database'] = '${DB_NAME}'
+    gitlab_rails['db_password'] = '${DB_PASS}'
+    
+    # Подключение к Redis (infra)
+    gitlab_rails['redis_host'] = '${REDIS_HOST}'
+    gitlab_rails['redis_port'] = 6379
+    gitlab_rails['redis_password'] = '${REDIS_PASS}'
+    
+    # Настройка SMTP Яндекс
+    gitlab_rails['smtp_enable'] = true
+    gitlab_rails['smtp_address'] = "smtp.yandex.ru"
+    gitlab_rails['smtp_port'] = 465
+    gitlab_rails['smtp_user_name'] = "${SMTP_USER}"
+    gitlab_rails['smtp_password'] = "${SMTP_PASS}"
+    gitlab_rails['smtp_tls'] = true
+    gitlab_rails['smtp_verify_mode'] = "none"
+    gitlab_rails['smtp_authentication'] = "login"
+    gitlab_rails['gitlab_email_from'] = "${SMTP_USER}"
+    gitlab_rails['gitlab_email_reply_to'] = "${SMTP_USER}"
+---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -114,6 +152,9 @@ metadata:
     app: gitlab-ce
 spec:
   replicas: 1
+  # Стратегия Recreate решает проблему зависания ReadWriteOnce дисков
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: gitlab-ce
@@ -130,54 +171,23 @@ spec:
           name: http
         - containerPort: 22
           name: ssh
-        env:
-        # ИСПРАВЛЕНО: Теперь все данные БД, Redis и SMTP ЯВНО прописаны внутри конфигуратора Omnibus
-        - name: GITLAB_OMNIBUS_CONFIG
-          value: |
-            external_url 'http://${GITLAB_DOMAIN}'
-            
-            # Отключение встроенных стейтфул-компонентов
-            postgresql['enable'] = false
-            redis['enable'] = false
-            
-            # Настройка веб-сервера Ingress-совместимым образом
-            nginx['listen_port'] = 80
-            nginx['listen_https'] = false
-            
-            # Настройки подключения к твоей базе данных в пространстве infra
-            gitlab_rails['db_adapter'] = 'postgresql'
-            gitlab_rails['db_encoding'] = 'utf8'
-            gitlab_rails['db_host'] = '${DB_HOST}'
-            gitlab_rails['db_port'] = 5432
-            gitlab_rails['db_username'] = '${DB_USER}'
-            gitlab_rails['db_database'] = '${DB_NAME}'
-            gitlab_rails['db_password'] = '${DB_PASS}'
-            
-            # Настройки подключения к твоему Redis в пространстве infra
-            gitlab_rails['redis_host'] = '${REDIS_HOST}'
-            gitlab_rails['redis_port'] = 6379
-            gitlab_rails['redis_password'] = '${REDIS_PASS}'
-            
-            # Полная конфигурация SMTP Яндекс шлюза
-            gitlab_rails['smtp_enable'] = true
-            gitlab_rails['smtp_address'] = "smtp.yandex.ru"
-            gitlab_rails['smtp_port'] = 465
-            gitlab_rails['smtp_user_name'] = "${SMTP_USER}"
-            gitlab_rails['smtp_password'] = "${SMTP_PASS}"
-            gitlab_rails['smtp_tls'] = true
-            gitlab_rails['smtp_verify_mode'] = "none"
-            gitlab_rails['smtp_authentication'] = "login"
-            gitlab_rails['gitlab_email_from'] = "${SMTP_USER}"
-            gitlab_rails['gitlab_email_reply_to'] = "${SMTP_USER}"
         resources:
           limits:
             memory: 4Gi
           requests:
-            memory: 2Gi
+            memory: 2.5Gi
         volumeMounts:
+        # Монтируем конфигурационный файл из ConfigMap прямо в /etc/gitlab
+        - name: gitlab-config-volume
+          mountPath: /etc/gitlab/gitlab.rb
+          subPath: gitlab.rb
         - mountPath: /var/opt/gitlab
           name: gitlab-data
       volumes:
+      # Описываем том для конфига на базе ConfigMap
+      - name: gitlab-config-volume
+        configMap:
+          name: gitlab-config
       - name: gitlab-data
         persistentVolumeClaim:
           claimName: gitlab-data-pvc
@@ -218,5 +228,4 @@ spec:
 EOF
 
 echo ""
-echo "[SUCCESS] GitLab CE успешно развернут из чистых манифестов с привязкой к infra!"
-echo "Мониторинг пода: kubectl get pods -n ${NAMESPACE} -w"
+echo "[SUCCESS] GitLab CE успешно обновлен и переведен на схему с ConfigMap!"
