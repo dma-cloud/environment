@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Скрипт для интерактивного развертывания официального Kubernetes Dashboard
+# Скрипт для интерактивного развертывания стабильной версии Kubernetes Dashboard (v2.7.0)
 # Разработано в рамках инфраструктуры dma-cloud/environment
 
 set -e
@@ -41,7 +41,7 @@ else
     fi
 fi
 
-# 5. Деплоим официальные манифесты Dashboard (v3.0, адаптированная под офлайн/кэш)
+# 5. Деплоим стабильную версию Dashboard (v2.7.0, официально кэшируемая из Docker Hub)
 echo "[INFO] Применение манифестов Kubernetes Dashboard..."
 
 kubectl apply -f - <<EOF
@@ -64,25 +64,36 @@ spec:
     spec:
       containers:
       - name: kubernetes-dashboard
-        image: kubernetesui/dashboard:v3.0.0-alpha0
+        image: kubernetesui/dashboard:v2.7.0  # Стабильная версия, доступная в Docker Hub!
         ports:
-        - containerPort: 9090
+        - containerPort: 8443
           protocol: TCP
+        args:
+          - --auto-generate-certificates
+          - --namespace=kubernetes-dashboard
         resources:
           limits:
             memory: 512Mi
           requests:
             memory: 256Mi
+        volumeMounts:
+        - mountPath: /tmp
+          name: tmp-volume
+      volumes:
+      - name: tmp-volume
+        emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: kubernetes-dashboard
   namespace: kubernetes-dashboard
+  labels:
+    k8s-app: kubernetes-dashboard
 spec:
   ports:
-  - port: 80
-    targetPort: 9090
+  - port: 443
+    targetPort: 8443
   selector:
     k8s-app: kubernetes-dashboard
 ---
@@ -91,6 +102,10 @@ kind: Ingress
 metadata:
   name: kubernetes-dashboard-ingress
   namespace: kubernetes-dashboard
+  annotations:
+    # Указываем Traefik, что бэкэнд использует HTTPS внутри кластера
+    ingress.kubernetes.io/protocol: "https"
+    traefik.ingress.kubernetes.io/router.tls: "true"
 spec:
   ingressClassName: traefik
   rules:
@@ -103,7 +118,7 @@ spec:
           service:
             name: kubernetes-dashboard
             port:
-              number: 80
+              number: 443
   tls:
   - hosts:
     - $DASHBOARD_DOMAIN
@@ -135,10 +150,10 @@ subjects:
 EOF
 
 echo ""
-echo "[INFO] Генерация токена доступа для входа в панель..."
+echo "[INFO] Генерация токена доступа для входа в panel..."
 echo "-----------------------------------------------------------------"
 
-# Генерируем токен напрямую в переменную сессии (чистое выполнение вне HERE-документов)
+# Генерируем токен напрямую в текущую переменную Bash-сессии
 DASH_TOKEN=$(kubectl -n kubernetes-dashboard create token admin-user --duration=8760h)
 
 echo "ВАШ ТОКЕН ДЛЯ ВХОДА (Скопируйте его целиком):"
