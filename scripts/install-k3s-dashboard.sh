@@ -15,7 +15,7 @@ if ! command -v kubectl &> /dev/null; then
     exit 1
 fi
 
-# 2. Запрашиваем домен (Без дефолтных значений)
+# 2. Запрашиваем домен
 echo -n "Введите доменное имя для панели управления (например, k3s.lab): "
 read -r DASHBOARD_DOMAIN
 if [ -z "$DASHBOARD_DOMAIN" ]; then
@@ -37,12 +37,11 @@ else
         echo "[INFO] TLS-секрет успешно скопирован в пространство 'kubernetes-dashboard'."
     else
         echo "[WARNING] Секрет 'wildcard-lab-tls' не найден в корневом пространстве 'infra'."
-        echo "Панель запустится, но для работы HTTPS потребуется импортировать сертификаты."
     fi
 fi
 
-# 5. Деплоим стабильную версию Dashboard (v2.7.0, официально кэшируемая из Docker Hub)
-echo "[INFO] Применение манифестов Kubernetes Dashboard..."
+# 5. Применение полных манифестов роли и деплоя v2.7.0 (С привязкой к admin-user)
+echo "[INFO] Применение манифестов и RBAC для Kubernetes Dashboard..."
 
 kubectl apply -f - <<EOF
 apiVersion: apps/v1
@@ -62,15 +61,18 @@ spec:
       labels:
         k8s-app: kubernetes-dashboard
     spec:
+      # КРИТИЧНО: Заставляем под работать под административным сервис-аккаунтом
+      serviceAccountName: admin-user
       containers:
       - name: kubernetes-dashboard
-        image: kubernetesui/dashboard:v2.7.0  # Стабильная версия, доступная в Docker Hub!
+        image: kubernetesui/dashboard:v2.7.0
         ports:
-        - containerPort: 8443
+        - containerPort: 9090
           protocol: TCP
         args:
-          - --auto-generate-certificates
+          # Жестко указываем панели работать в своем пространстве, а не лезть в kube-system
           - --namespace=kubernetes-dashboard
+          - --http-port=9090
         resources:
           limits:
             memory: 512Mi
@@ -92,8 +94,8 @@ metadata:
     k8s-app: kubernetes-dashboard
 spec:
   ports:
-  - port: 443
-    targetPort: 8443
+  - port: 80
+    targetPort: 9090
   selector:
     k8s-app: kubernetes-dashboard
 ---
@@ -102,10 +104,6 @@ kind: Ingress
 metadata:
   name: kubernetes-dashboard-ingress
   namespace: kubernetes-dashboard
-  annotations:
-    # Указываем Traefik, что бэкэнд использует HTTPS внутри кластера
-    ingress.kubernetes.io/protocol: "https"
-    traefik.ingress.kubernetes.io/router.tls: "true"
 spec:
   ingressClassName: traefik
   rules:
@@ -118,17 +116,13 @@ spec:
           service:
             name: kubernetes-dashboard
             port:
-              number: 443
+              number: 80
   tls:
   - hosts:
     - $DASHBOARD_DOMAIN
     secretName: wildcard-lab-tls
-EOF
-
-# 6. Создаем пользователя-администратора (ClusterAdmin) для авторизации
-echo "[INFO] Создание сервисного аккаунта администратора..."
-
-kubectl apply -f - <<EOF
+---
+# 6. Создаем пользователя-администратора и привязываем его к ClusterAdmin
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -150,10 +144,10 @@ subjects:
 EOF
 
 echo ""
-echo "[INFO] Генерация токена доступа для входа в panel..."
+echo "[INFO] Генерация токена доступа для входа в панель..."
 echo "-----------------------------------------------------------------"
 
-# Генерируем токен напрямую в текущую переменную Bash-сессии
+# Генерируем долгоживущий токен доступа напрямую из Bash-окружения
 DASH_TOKEN=$(kubectl -n kubernetes-dashboard create token admin-user --duration=8760h)
 
 echo "ВАШ ТОКЕН ДЛЯ ВХОДА (Скопируйте его целиком):"
