@@ -109,6 +109,7 @@ MODULES=(
     "install-k3s-infra.sh" "Установка k3s infra"
     "install-k3s-certs.sh" "Устновка https серта для *.lab"
     "install-k3s-portainer.sh" "Развертывание графической панели Portainer CE в k3s"
+    "install-gitlab.sh" "Развертывание gitlab"
 )
 
 # Запускаем движок
