@@ -108,7 +108,7 @@ MODULES=(
     "configure-k3s-registry.sh" "конфигурация кеша в к3с"
     "install-k3s-infra.sh" "Установка k3s infra"
     "install-k3s-certs.sh" "Устновка https серта для *.lab"
-    "install-k3s-dashboard.sh" "Развертывание графической панели Kubernetes Dashboard"
+    "install-k3s-portainer.sh" "Развертывание графической панели Portainer CE в k3s"
 )
 
 # Запускаем движок
