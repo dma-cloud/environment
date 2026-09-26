@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Скрипт для интерактивного развертывания Portainer CE в k3s
-# Разработано в рамках infrastructure dma-cloud/environment
+# Разработано в рамках инфраструктуры dma-cloud/environment
 
 set -euo pipefail
 
@@ -30,22 +30,55 @@ fi
 echo "[INFO] Проверка и создание пространства имен 'portainer'..."
 kubectl create namespace portainer --dry-run=client -o yaml | kubectl apply -f -
 
-# 4. Проверка и синхронизация TLS Wildcard-сертификата (Нативный надежный экспорт)
-echo "[INFO] Синхронизация SSL-сертификатов кластера..."
+# 4. Интерактивный импорт TLS Wildcard-сертификата (через Ctrl+D)
+echo "[INFO] Настройка SSL-сертификатов для пространства 'portainer'..."
 if kubectl get secret wildcard-lab-tls -n portainer &>/dev/null; then
-    echo "[INFO] Секрет 'wildcard-lab-tls' уже существует. Шаг пропущен."
+    echo "[INFO] Секрет 'wildcard-lab-tls' уже существует в пространстве 'portainer'. Шаг пропущен."
 else
-    if kubectl get secret wildcard-lab-tls -n infra &>/dev/null; then
-        # ИСПРАВЛЕНО: Чистый перенос объекта через sed без разбора jsonpath и base64
-        kubectl get secret wildcard-lab-tls -n infra -o yaml | \
-            sed 's/namespace: infra/namespace: portainer/' | \
-            kubectl apply -f -
-        echo "[INFO] TLS-секрет успешно скопирован в пространство 'portainer'."
-    else
-        echo "[ERROR] Секрет 'wildcard-lab-tls' не найден в пространстве 'infra'."
-        echo "[ERROR] Сначала импортируйте TLS-сертификат через install-k3s-certs.sh."
+    echo ""
+    echo "--- Шаг 4.1: Вставка Публичного Сертификата (Certificate / CRT) ---"
+    echo "Вставьте содержимое файла сертификата (включая BEGIN/END CERTIFICATE)"
+    echo "После окончания вставки нажмите Enter, а затем Ctrl+D:"
+    echo "-----------------------------------------------------------------"
+    
+    # Читаем мультистрочный ввод из TTY
+    CRT_CONTENT=$(cat)
+    if [ -z "$CRT_CONTENT" ]; then
+        echo "[ERROR] Содержимое сертификата пустое! Операция отменена."
         exit 1
     fi
+
+    echo ""
+    echo "--- Шаг 4.2: Вставка Приватного Ключа (Private Key / KEY) ---"
+    echo "Вставьте содержимое приватного ключа (включая BEGIN/END PRIVATE KEY)"
+    echo "После окончания вставки нажмите Enter, а затем Ctrl+D:"
+    echo "-----------------------------------------------------------------"
+    
+    KEY_CONTENT=$(cat)
+    if [ -z "$KEY_CONTENT" ]; then
+        echo "[ERROR] Содержимое ключа пустое! Операция отменена."
+        exit 1
+    fi
+
+    echo ""
+    echo "[INFO] Передача TLS-данных в API Kubernetes..."
+    
+    # Чтобы kubectl гарантированно прочитал PEM-данные без Process Substitution,
+    # мы создаем временные файлы в изолированной директории /tmp на мастере,
+    # которая автоматически очищается, и сразу затираем их после создания секрета.
+    TMP_DIR=$(mktemp -d)
+    echo "$CRT_CONTENT" > "${TMP_DIR}/tls.crt"
+    echo "$KEY_CONTENT" > "${TMP_DIR}/tls.key"
+
+    kubectl create secret tls wildcard-lab-tls \
+      --namespace=portainer \
+      --cert="${TMP_DIR}/tls.crt" \
+      --key="${TMP_DIR}/tls.key" \
+      --dry-run=client -o yaml | kubectl apply -f -
+
+    # Намертво вычищаем следы приватного ключа из папки /tmp
+    rm -rf "$TMP_DIR"
+    echo "[INFO] TLS-секрет успешно создан в пространстве 'portainer'."
 fi
 
 # 5. Применение манифестов Portainer CE (Официальный образ с Docker Hub)
