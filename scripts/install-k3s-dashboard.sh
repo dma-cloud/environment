@@ -46,10 +46,11 @@ if kubectl get secret wildcard-lab-tls -n kubernetes-dashboard &>/dev/null; then
     echo "[INFO] Секрет 'wildcard-lab-tls' уже существует. Шаг пропущен."
 else
     if kubectl get secret wildcard-lab-tls -n infra &>/dev/null; then
+        # ИСПРАВЛЕНО: Правильный синтаксис jsonpath ['tls.crt'] вместо tls\.crt
         kubectl create secret tls wildcard-lab-tls \
             --namespace=kubernetes-dashboard \
-            --cert=<(kubectl get secret wildcard-lab-tls -n infra -o jsonpath='{.data.tls\.crt}' | base64 --decode) \
-            --key=<(kubectl get secret wildcard-lab-tls -n infra -o jsonpath='{.data.tls\.key}' | base64 --decode) \
+            --cert=<(kubectl get secret wildcard-lab-tls -n infra -o jsonpath='{.data.['\''tls.crt'\'']}' | base64 --decode) \
+            --key=<(kubectl get secret wildcard-lab-tls -n infra -o jsonpath='{.data.['\''tls.key'\'']}' | base64 --decode) \
             --dry-run=client -o yaml | kubectl apply -f -
         echo "[INFO] TLS-секрет успешно скопирован."
     else
@@ -59,7 +60,7 @@ else
     fi
 fi
 
-# 5. Применение манифестов современной панели v3 (Образ адаптирован под Docker Hub кэш)
+# 5. Применение манифестов современной панели v3 (All-in-One образ с Docker Hub)
 echo "[INFO] Применение манифестов и RBAC для Kubernetes Dashboard v3..."
 
 kubectl apply -f - <<EOF
@@ -83,8 +84,8 @@ spec:
       serviceAccountName: admin-user
       containers:
       - name: kubernetes-dashboard
-        # ИСПОЛЬЗУЕМ ВЕРСИЮ v3 С DOCKER HUB (Она гарантированно пройдет через ваш прокси-кэш)
-        image: docker.io/kubernetesui/dashboard:v3.0.0-alpha0
+        # ИСПРАВЛЕНО: Используем All-in-One образ (Фронтенд + Бэкэнд вместе), официально доступный на Docker Hub
+        image: docker.io/kubernetesui/dashboard-auth:v3.0.0-alpha0
         ports:
         - containerPort: 9090
           protocol: TCP
