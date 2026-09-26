@@ -206,6 +206,8 @@ spec:
       containers:
       - name: postgres
         image: postgres:17-alpine
+        command: ["postgres"]
+        args: ["-c", "max_locks_per_transaction=256", "-c", "shared_buffers=512MB"]
         ports:
         - containerPort: 5432
           name: postgres

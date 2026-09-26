@@ -98,15 +98,15 @@ metadata:
 data:
   # Файл конфигурации ядра GitLab
   gitlab.rb: |
-    external_url 'http://${GITLAB_DOMAIN}'
+    external_url 'https://${GITLAB_DOMAIN}'
     
     # Отключение встроенных баз и кэша
     postgresql['enable'] = false
     redis['enable'] = false
     
     # Настройка веб-сервера под Ingress контроллер
-    nginx['listen_port'] = 80
-    nginx['listen_https'] = false
+    gitlab_rails['nginx']['listen_port'] = 80
+    gitlab_rails['nginx']['listen_https'] = false
     
     # Подключение к PostgreSQL в пространстве infra
     gitlab_rails['db_adapter'] = 'postgresql'
@@ -147,7 +147,6 @@ data:
     redis_exporter['enable'] = false
     postgres_exporter['enable'] = false
     gitlab_exporter['enable'] = false
-    grafana['enable'] = false
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
