@@ -25,31 +25,43 @@ SECRET_NAME="gitlab-devops-secrets"
 INFRA_SECRET="postgres-infra-secrets"
 INFRA_NS="infra"
 
+DB_HOST="postgres-infra-service.infra.svc.cluster.local"
+REDIS_HOST="redis-infra-service.infra.svc.cluster.local"
+
 # 2. Проверка и создание Namespace
 echo "[INFO] Проверка пространства имен '${NAMESPACE}'..."
 kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
 
-# 3. Синхронизация и генерация секретов
+# 3. Синхронизация и генерация данных (Проверяем наличие секретов)
 if kubectl get secret "${SECRET_NAME}" -n "${NAMESPACE}" &> /dev/null; then
-    echo "[INFO] Секрет '${SECRET_NAME}' уже существует. Пропускаем настройку."
+    echo "[INFO] Секрет '${SECRET_NAME}' уже существует. Извлекаем данные для деплоя..."
+    
     GITLAB_DOMAIN=$(kubectl get secret "${SECRET_NAME}" -n "${NAMESPACE}" -o jsonpath='{.data.gitlab-domain}' | base64 --decode)
+    SMTP_USER=$(kubectl get secret "${SECRET_NAME}" -n "${NAMESPACE}" -o jsonpath='{.data.smtp-username}' | base64 --decode)
+    SMTP_PASS=$(kubectl get secret "${SECRET_NAME}" -n "${NAMESPACE}" -o jsonpath='{.data.smtp-password}' | base64 --decode)
+    DB_USER=$(kubectl get secret "${SECRET_NAME}" -n "${NAMESPACE}" -o jsonpath='{.data.postgres-username}' | base64 --decode)
+    DB_NAME=$(kubectl get secret "${SECRET_NAME}" -n "${NAMESPACE}" -o jsonpath='{.data.postgres-database}' | base64 --decode)
+    DB_PASS=$(kubectl get secret "${SECRET_NAME}" -n "${NAMESPACE}" -o jsonpath='{.data.postgres-password}' | base64 --decode)
+    REDIS_PASS=$(kubectl get secret "${SECRET_NAME}" -n "${NAMESPACE}" -o jsonpath='{.data.redis-password}' | base64 --decode)
 else
-    echo "[INFO] Секреты не найдены. Запускается импорт данных..."
+    echo "[INFO] Секреты не найдены. Запускается импорт данных из '${INFRA_NS}'..."
     
     printf '%s' "Введите базовый домен для GitLab (например, gitlab.lab): "
     if ! IFS= read -r GITLAB_DOMAIN; then echo "[ERROR] Ошибка чтения."; exit 1; fi
     GITLAB_DOMAIN=${GITLAB_DOMAIN:-"gitlab.lab"}
 
-    # Автоматически забираем учетные данные Яндекса и базы из существующей инфры
+    # Проверяем, есть ли готовый секрет инфраструктуры
     if kubectl get secret "${INFRA_SECRET}" -n "${INFRA_NS}" &> /dev/null; then
-        echo "[INFO] Пароли СУБД и Redis импортируются из пространства '${INFRA_NS}'..."
+        echo "[INFO] Импортируем пароли СУБД и Redis..."
         
         DB_USER="gitlab"
         DB_NAME="gitlabhq_production"
-        DB_PASS=$(kubectl get secret "${INFRA_SECRET}" -n "${INFRA_NS}" -o jsonpath='{.data.gitlab-db-password}')
-        REDIS_PASS=$(kubectl get secret "${INFRA_SECRET}" -n "${INFRA_NS}" -o jsonpath='{.data.redis-password}')
         
-        # Запрашиваем только почту Яндекса (так как в инфре её могло не быть)
+        # Расшифровываем переменные напрямую в Bash для подстановки в Omnibus-конфиг
+        DB_PASS=$(kubectl get secret "${INFRA_SECRET}" -n "${INFRA_NS}" -o jsonpath='{.data.gitlab-db-password}' | base64 --decode)
+        REDIS_PASS=$(kubectl get secret "${INFRA_SECRET}" -n "${INFRA_NS}" -o jsonpath='{.data.redis-password}' | base64 --decode)
+        
+        # Запрашиваем почту Яндекса
         printf '%s' "Введите email Яндекс для SMTP (например, user@yandex.ru): "
         if ! IFS= read -r SMTP_USER; then echo "[ERROR] Ошибка чтения."; exit 1; fi
         
@@ -57,28 +69,17 @@ else
         if ! IFS= read -r -s SMTP_PASS; then echo "[ERROR] Ошибка чтения."; exit 1; fi
         printf '\n'
         
-        # Кодируем новые данные в base64
-        B64_SMTP_USER=$(echo -n "$SMTP_USER" | base64 | tr -d '\n')
-        B64_SMTP_PASS=$(echo -n "$SMTP_PASS" | base64 | tr -d '\n')
-        B64_DOMAIN=$(echo -n "$GITLAB_DOMAIN" | base64 | tr -d '\n')
-
-        # Записываем объединенный секрет
-        cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: Secret
-metadata:
-  name: ${SECRET_NAME}
-  namespace: ${NAMESPACE}
-type: Opaque
-data:
-  smtp-username: ${B64_SMTP_USER}
-  smtp-password: ${B64_SMTP_PASS}
-  postgres-username: $(echo -n "$DB_USER" | base64 | tr -d '\n')
-  postgres-password: ${DB_PASS}
-  postgres-database: $(echo -n "$DB_NAME" | base64 | tr -d '\n')
-  redis-password: ${REDIS_PASS}
-  gitlab-domain: ${B64_DOMAIN}
-EOF
+        # Создаем секрет "на всякий случай" для хранения в namespace devops (для GitOps-консистентности)
+        kubectl create secret generic "$SECRET_NAME" \
+          --namespace="$NAMESPACE" \
+          --from-literal=smtp-username="$SMTP_USER" \
+          --from-literal=smtp-password="$SMTP_PASS" \
+          --from-literal=postgres-username="$DB_USER" \
+          --from-literal=postgres-password="$DB_PASS" \
+          --from-literal=postgres-database="$DB_NAME" \
+          --from-literal=redis-password="$REDIS_PASS" \
+          --from-literal=gitlab-domain="$GITLAB_DOMAIN" \
+          --dry-run=client -o yaml | kubectl apply -f -
     else
         echo "[ERROR] Секрет базы данных '${INFRA_SECRET}' в пространстве '${INFRA_NS}' не найден!"
         echo "Сначала разверните базовую инфраструктуру postgres/redis."
@@ -89,6 +90,7 @@ fi
 # 4. Развертывание GitLab CE через чистый декларативный манифест
 echo "[INFO] Применение манифестов GitLab CE в Kubernetes..."
 
+# Переменные Bash подставляются прямо внутрь строки конфигурации Omnibus на этапе генерации
 kubectl apply -f - <<EOF
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -129,65 +131,44 @@ spec:
         - containerPort: 22
           name: ssh
         env:
-        # Связываем GitLab с твоим внешним PostgreSQL
+        # ИСПРАВЛЕНО: Теперь все данные БД, Redis и SMTP ЯВНО прописаны внутри конфигуратора Omnibus
         - name: GITLAB_OMNIBUS_CONFIG
           value: |
             external_url 'http://${GITLAB_DOMAIN}'
             
-            # Отключение встроенных сервисов (Твое ключевое требование)
+            # Отключение встроенных стейтфул-компонентов
             postgresql['enable'] = false
             redis['enable'] = false
+            
+            # Настройка веб-сервера Ingress-совместимым образом
             nginx['listen_port'] = 80
             nginx['listen_https'] = false
             
-            # Подключение к внешней Postgres в infra
+            # Настройки подключения к твоей базе данных в пространстве infra
             gitlab_rails['db_adapter'] = 'postgresql'
             gitlab_rails['db_encoding'] = 'utf8'
-            gitlab_rails['db_host'] = 'postgres-infra-service.infra.svc.cluster.local'
+            gitlab_rails['db_host'] = '${DB_HOST}'
             gitlab_rails['db_port'] = 5432
+            gitlab_rails['db_username'] = '${DB_USER}'
+            gitlab_rails['db_database'] = '${DB_NAME}'
+            gitlab_rails['db_password'] = '${DB_PASS}'
             
-            # Подключение к внешнему Redis в infra
-            gitlab_rails['redis_host'] = 'redis-infra-service.infra.svc.cluster.local'
+            # Настройки подключения к твоему Redis в пространстве infra
+            gitlab_rails['redis_host'] = '${REDIS_HOST}'
             gitlab_rails['redis_port'] = 6379
+            gitlab_rails['redis_password'] = '${REDIS_PASS}'
             
-            # Настройка SMTP Яндекс
+            # Полная конфигурация SMTP Яндекс шлюза
             gitlab_rails['smtp_enable'] = true
             gitlab_rails['smtp_address'] = "smtp.yandex.ru"
             gitlab_rails['smtp_port'] = 465
+            gitlab_rails['smtp_user_name'] = "${SMTP_USER}"
+            gitlab_rails['smtp_password'] = "${SMTP_PASS}"
             gitlab_rails['smtp_tls'] = true
+            gitlab_rails['smtp_verify_mode'] = "none"
             gitlab_rails['smtp_authentication'] = "login"
-        
-        # Передаем пароли в переменные среды из K8s секретов напрямую
-        - name: DB_USER
-          valueFrom:
-            secretKeyRef:
-              name: ${SECRET_NAME}
-              key: postgres-username
-        - name: DB_NAME
-          valueFrom:
-            secretKeyRef:
-              name: ${SECRET_NAME}
-              key: postgres-database
-        - name: DB_PASS
-          valueFrom:
-            secretKeyRef:
-              name: ${SECRET_NAME}
-              key: postgres-password
-        - name: REDIS_PASS
-          valueFrom:
-            secretKeyRef:
-              name: ${SECRET_NAME}
-              key: redis-password
-        - name: SMTP_USER
-          valueFrom:
-            secretKeyRef:
-              name: ${SECRET_NAME}
-              key: smtp-username
-        - name: SMTP_PASS
-          valueFrom:
-            secretKeyRef:
-              name: ${SECRET_NAME}
-              key: smtp-password
+            gitlab_rails['gitlab_email_from'] = "${SMTP_USER}"
+            gitlab_rails['gitlab_email_reply_to'] = "${SMTP_USER}"
         resources:
           limits:
             memory: 4Gi
@@ -237,5 +218,5 @@ spec:
 EOF
 
 echo ""
-echo "[SUCCESS] GitLab CE успешно развернут из манифестов!"
+echo "[SUCCESS] GitLab CE успешно развернут из чистых манифестов с привязкой к infra!"
 echo "Мониторинг пода: kubectl get pods -n ${NAMESPACE} -w"
