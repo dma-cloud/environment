@@ -40,10 +40,40 @@ else
     fi
 fi
 
-# 5. Применение полных манифестов роли и деплоя v2.7.0 (С привязкой к admin-user)
-echo "[INFO] Применение манифестов и RBAC для Kubernetes Dashboard..."
+# 5. Применение полных манифестов, RBAC и сервисных ключей безопасности
+echo "[INFO] Применение манифестов, секретов шифрования сессий и RBAC..."
 
 kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  labels:
+    k8s-app: kubernetes-dashboard
+  name: kubernetes-dashboard-certs
+  namespace: kubernetes-dashboard
+type: Opaque
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  labels:
+    k8s-app: kubernetes-dashboard
+  name: kubernetes-dashboard-csrf
+  namespace: kubernetes-dashboard
+type: Opaque
+data:
+  # Пустая заглушка для инициализации токена сессии безопасности
+  csrf: ""
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  labels:
+    k8s-app: kubernetes-dashboard
+  name: kubernetes-dashboard-key-holder
+  namespace: kubernetes-dashboard
+type: Opaque
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -61,7 +91,6 @@ spec:
       labels:
         k8s-app: kubernetes-dashboard
     spec:
-      # КРИТИЧНО: Заставляем под работать под административным сервис-аккаунтом
       serviceAccountName: admin-user
       containers:
       - name: kubernetes-dashboard
@@ -70,18 +99,25 @@ spec:
         - containerPort: 9090
           protocol: TCP
         args:
-          # Жестко указываем панели работать в своем пространстве, а не лезть в kube-system
           - --namespace=kubernetes-dashboard
           - --http-port=9090
+          # КРИТИЧНО ДЛЯ ВЕТКИ v2: принудительно заставляем панель слушать только голый HTTP внутри кластера
+          - --enable-insecure-login=true
+          - --sidecar-host=http://127.0.0.1:8000
         resources:
           limits:
             memory: 512Mi
           requests:
             memory: 256Mi
         volumeMounts:
+        - mountPath: /certs
+          name: kubernetes-dashboard-certs
         - mountPath: /tmp
           name: tmp-volume
       volumes:
+      - name: kubernetes-dashboard-certs
+        secret:
+          secretName: kubernetes-dashboard-certs
       - name: tmp-volume
         emptyDir: {}
 ---
@@ -122,7 +158,6 @@ spec:
     - $DASHBOARD_DOMAIN
     secretName: wildcard-lab-tls
 ---
-# 6. Создаем пользователя-администратора и привязываем его к ClusterAdmin
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -147,7 +182,6 @@ echo ""
 echo "[INFO] Генерация токена доступа для входа в панель..."
 echo "-----------------------------------------------------------------"
 
-# Генерируем долгоживущий токен доступа напрямую из Bash-окружения
 DASH_TOKEN=$(kubectl -n kubernetes-dashboard create token admin-user --duration=8760h)
 
 echo "ВАШ ТОКЕН ДЛЯ ВХОДА (Скопируйте его целиком):"
