@@ -1,8 +1,8 @@
 #!/bin/bash
 # Модуль установки GitLab Community Edition (CE) в Namespace 'devops'
-# С подключением внешних PostgreSQL и Redis из пространства 'infra', а также SMTP Яндекс
+# С автоматическим подтягиванием паролей СУБД/Redis из пространства 'infra' и настройкой SMTP Яндекс
 
-set -e
+set -euo pipefail
 
 # Цвета для вывода
 GREEN='\033[0;32m'
@@ -10,107 +10,157 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-echo -e "${GREEN}=== Настройка и развертывание GitLab CE (Инфра-режим) ===${NC}"
+echo "====================================================="
+echo "   Настройка и развертывание GitLab CE (devops)      "
+echo "====================================================="
 
-# 1. Проверка утилит
-for cmd in kubectl helm; do
-    if ! command -v $cmd &> /dev/null; then
-        echo -e "${RED}Ошибка: утилита $cmd не установлена.${NC}"
-        exit 1
-    fi
-done
+# 1. Проверяем наличие утилит
+if ! command -v kubectl &> /dev/null; then
+    echo "[ERROR] Утилита kubectl не найдена!"
+    exit 1
+fi
+
+if ! command -v helm &> /dev/null; then
+    echo "[ERROR] Утилита helm не найдена!"
+    exit 1
+fi
+
+if ! command -v openssl &> /dev/null; then
+    echo "[ERROR] Утилита openssl не найдена! Установите OpenSSL для генерации паролей."
+    exit 1
+fi
 
 NAMESPACE="devops"
 SECRET_NAME="gitlab-devops-secrets"
+INFRA_SECRET="postgres-infra-secrets"
+INFRA_NS="infra"
+
 DB_HOST="postgres-infra-service.infra.svc.cluster.local"
 REDIS_HOST="redis-infra-service.infra.svc.cluster.local"
 
-# Создаем/проверяем Namespace заранее, чтобы kubectl get secret не падал, если пространства нет
-kubectl create namespace ${NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
+# Функция для получения или генерации пароля (в случае если секреты создаются с нуля)
+get_or_gen_password() {
+    local prompt_text="$1"
+    local user_input
+    local generated_pass
+    local choice
 
-# 2. ПРОВЕРКА: Существует ли уже секрет с паролями?
-if kubectl get secret "${SECRET_NAME}" -n "${NAMESPACE}" &> /dev/null; then
-    echo -e "${GREEN}Секрет '${SECRET_NAME}' уже существует в namespace '${NAMESPACE}'. Пропускаем ввод паролей.${NC}"
-    
-    # Извлекаем сохраненный SMTP_USER из секрета для подстановки в блок email.from в values.yaml
-    echo -e "${YELLOW}Извлекаем почтовый логин из существующего секрета...${NC}"
-    SMTP_USER=$(kubectl get secret "${SECRET_NAME}" -n "${NAMESPACE}" -o jsonpath='{.data.smtp-username}' | base64 --decode)
-    
-    # Проверяем, был ли в секрете сохранен пароль от Redis
-    HAS_REDIS_PASS=$(kubectl get secret "${SECRET_NAME}" -n "${NAMESPACE}" -o jsonpath='{.data.redis-password}' 2>/dev/null || true)
-else
-    echo -e "${YELLOW}Секрет '${SECRET_NAME}' не найден. Запускаем интерактивную настройку...${NC}"
+    printf '%s\n' "$prompt_text" >&2
+    printf '%s\n' \
+        "1) Сгенерировать надежный случайный пароль автоматически" \
+        "2) Ввести пароль вручную" >&2
+    printf '%s' "Выберите вариант (1 или 2): " >&2
+    if ! IFS= read -r choice; then echo "[ERROR] Не удалось прочитать выбор." >&2; exit 1; fi
 
-    # 3. Интерактивный запрос данных для SMTP Яндекс
-    echo -e "${YELLOW}--- Настройка SMTP Яндекс ---${NC}"
-    read -p "Введите email Яндекс (например, user@yandex.ru): " SMTP_USER
-    if [ -z "$SMTP_USER" ]; then echo -e "${RED}Ошибка: Логин пустой.${NC}"; exit 1; fi
-
-    stty -echo
-    read -p "Введите пароль приложения Яндекс: " SMTP_PASS
-    stty echo
-    echo ""
-
-    # 4. Интерактивный запрос данных для PostgreSQL (infra)
-    echo -e "${YELLOW}--- Настройка внешней PostgreSQL ---${NC}"
-    read -p "Введите имя пользователя PostgreSQL [по умолчанию: gitlab]: " DB_USER
-    DB_USER=${DB_USER:-"gitlab"}
-
-    read -p "Введите имя базы данных GitLab [по умолчанию: gitlabhq_production]: " DB_NAME
-    DB_NAME=${DB_NAME:-"gitlabhq_production"}
-
-    stty -echo
-    read -p "Введите пароль для пользователя базы данных $DB_USER: " DB_PASS
-    stty echo
-    echo ""
-    if [ -z "$DB_PASS" ]; then echo -e "${RED}Ошибка: Пароль БД не может быть пустым.${NC}"; exit 1; fi
-
-    # 5. Интерактивный запрос данных для Redis (infra)
-    echo -e "${YELLOW}--- Настройка внешнего Redis ---${NC}"
-    echo -e "${YELLOW}Если Redis работает без пароля, просто нажмите Enter${NC}"
-    stty -echo
-    read -p "Введите пароль для Redis (если есть): " REDIS_PASS
-    stty echo
-    echo ""
-
-    # 6. Создание секретов gitlab-devops-secrets
-    echo -e "${GREEN}Создание Kubernetes секрета ${SECRET_NAME}...${NC}"
-
-    SECRET_CMD="kubectl create secret generic ${SECRET_NAME} \
-        --namespace=${NAMESPACE} \
-        --from-literal=smtp-username=\"${SMTP_USER}\" \
-        --from-literal=smtp-password=\"${SMTP_PASS}\" \
-        --from-literal=postgres-username=\"${DB_USER}\" \
-        --from-literal=postgres-password=\"${DB_PASS}\" \
-        --from-literal=postgres-database=\"${DB_NAME}\""
-
-    # ИСПРАВЛЕНО: Правильный синтаксис проверки флага непустой строки (-n)
-    if [ -n "$REDIS_PASS" ]; then
-        SECRET_CMD="${SECRET_CMD} --from-literal=redis-password=\"${REDIS_PASS}\""
-        HAS_REDIS_PASS="yes"
+    if [ "$choice" = "1" ]; then
+        generated_pass=$(openssl rand -base64 18)
+        printf '%s\n' "$generated_pass"
+    elif [ "$choice" = "2" ]; then
+        printf '%s' "Введите пароль (символы скрыты): " >&2
+        if ! IFS= read -r -s user_input; then echo "[ERROR] Не удалось прочитать пароль." >&2; exit 1; fi
+        printf '\n' >&2
+        if [ -z "$user_input" ]; then echo "[ERROR] Пароль не может быть пустым!" >&2; exit 1; fi
+        printf '%s\n' "$user_input"
     else
-        HAS_REDIS_PASS=""
+        echo "[ERROR] Неверный выбор!" >&2; exit 1
+    fi
+}
+
+# 2. Проверка и создание Namespace (до проверки секретов)
+echo "[INFO] Проверка и создание пространства имен '${NAMESPACE}'..."
+kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
+
+# 3. Проверяем, существует ли уже секрет в пространстве devops
+if kubectl get secret "${SECRET_NAME}" -n "${NAMESPACE}" &> /dev/null; then
+    echo "[INFO] Секрет '${SECRET_NAME}' уже существует в namespace '${NAMESPACE}'."
+    echo "[INFO] Пропускаем интерактивный ввод данных. Будут использованы текущие секреты."
+    
+    # Извлекаем домен и логин из существующего секрета
+    SMTP_USER=$(kubectl get secret "${SECRET_NAME}" -n "${NAMESPACE}" -o jsonpath='{.data.smtp-username}' | base64 --decode)
+    GITLAB_DOMAIN=$(kubectl get secret "${SECRET_NAME}" -n "${NAMESPACE}" -o jsonpath='{.data.gitlab-domain}' 2>/dev/null || echo "lab")
+else
+    echo "[INFO] Секреты для GitLab не найдены. Запускается процесс настройки..."
+    echo ""
+    
+    # Запрос домена
+    printf '%s' "Введите базовый домен верхнего уровня для GitLab (например, lab): "
+    if ! IFS= read -r GITLAB_DOMAIN; then echo "[ERROR] Ошибка чтения домена."; exit 1; fi
+    GITLAB_DOMAIN=${GITLAB_DOMAIN:-"lab"}
+
+    # Настройка SMTP Яндекс
+    echo "[Настройка SMTP Яндекс]"
+    printf '%s' "Введите email Яндекс (например, user@yandex.ru): "
+    if ! IFS= read -r SMTP_USER; then echo "[ERROR] Не удалось прочитать Email."; exit 1; fi
+    if [ -z "$SMTP_USER" ] || [[ ! "$SMTP_USER" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+        echo "[ERROR] Введите корректный Email."; exit 1;
     fi
 
-    eval "${SECRET_CMD} --dry-run=client -o yaml" | kubectl apply -f -
+    printf '%s' "Введите пароль приложения Яндекс (символы скрыты): "
+    if ! IFS= read -r -s SMTP_PASS; then echo "[ERROR] Не удалось прочитать пароль SMTP."; exit 1; fi
+    printf '\n'
+    if [ -z "$SMTP_PASS" ]; then echo "[ERROR] Пароль SMTP не может быть пустым."; exit 1; fi
+
+    # АВТОМАТИЗАЦИЯ: Проверяем, есть ли готовый секрет инфраструктуры в пространстве infra
+    if kubectl get secret "${INFRA_SECRET}" -n "${INFRA_NS}" &> /dev/null; then
+        echo "[INFO] Найден существующий стек инфраструктуры в namespace '${INFRA_NS}'."
+        echo "[INFO] Пароли СУБД, рута и Redis импортируются автоматически."
+        
+        DB_USER="gitlab"
+        DB_NAME="gitlabhq_production"
+        DB_PASS=$(kubectl get secret "${INFRA_SECRET}" -n "${INFRA_NS}" -o jsonpath='{.data.gitlab-db-password}' | base64 --decode)
+        GITLAB_ROOT_PASS=$(kubectl get secret "${INFRA_SECRET}" -n "${INFRA_NS}" -o jsonpath='{.data.gitlab-root-password}' | base64 --decode)
+        REDIS_PASS=$(kubectl get secret "${INFRA_SECRET}" -n "${INFRA_NS}" -o jsonpath='{.data.redis-password}' | base64 --decode)
+    else
+        # Если инфраструктурного секрета нет — запрашиваем всё вручную (фоллбэк-вариант)
+        echo "[WARN] Секрет '${INFRA_SECRET}' в пространстве '${INFRA_NS}' не найден."
+        echo "Пожалуйста, задайте параметры подключения вручную:"
+        
+        printf '%s' "Введите имя пользователя PostgreSQL [по умолчанию: gitlab]: "
+        if ! IFS= read -r DB_USER; then echo "[ERROR] Ошибка чтения."; exit 1; fi
+        DB_USER=${DB_USER:-"gitlab"}
+
+        printf '%s' "Введите имя базы данных GitLab [по умолчанию: gitlabhq_production]: "
+        if ! IFS= read -r DB_NAME; then echo "[ERROR] Ошибка чтения."; exit 1; fi
+        DB_NAME=${DB_NAME:-"gitlabhq_production"}
+
+        echo ""
+        DB_PASS=$(get_or_gen_password "[База данных] Пароль пользователя СУБД $DB_USER:")
+        GITLAB_ROOT_PASS=$(get_or_gen_password "[Администратор] Пароль root для веб-интерфейса GitLab:")
+        REDIS_PASS=$(get_or_gen_password "[Кэш] Защитный пароль для инстанса Redis:")
+    fi
+
+    # Создаем безопасный секрет в пространстве devops
+    echo ""
+    echo "[INFO] Создание безопасных секретов в Kubernetes (namespace: ${NAMESPACE})..."
+    kubectl create secret generic "$SECRET_NAME" \
+      --namespace="$NAMESPACE" \
+      --from-literal=smtp-username="$SMTP_USER" \
+      --from-literal=smtp-password="$SMTP_PASS" \
+      --from-literal=postgres-username="$DB_USER" \
+      --from-literal=postgres-password="$DB_PASS" \
+      --from-literal=postgres-database="$DB_NAME" \
+      --from-literal=gitlab-root-password="$GITLAB_ROOT_PASS" \
+      --from-literal=redis-password="$REDIS_PASS" \
+      --from-literal=gitlab-domain="$GITLAB_DOMAIN" \
+      --dry-run=client -o yaml | kubectl apply -f -
 fi
 
-# 7. Генерация временного values.yaml для Helm
+# 4. Генерация временного конфигурационного файла values.yaml
 VALUES_FILE=$(mktemp /tmp/gitlab-values.XXXXXX.yaml)
 
-echo -e "${GREEN}Генерация конфигурации Helm (values.yaml)...${NC}"
+echo "[INFO] Генерируется конфигурационный манифест (values.yaml)..."
 cat <<EOF > "$VALUES_FILE"
 global:
   communityEdition: true
   hosts:
-    domain: lab
+    domain: ${GITLAB_DOMAIN}
 
-  # Внешний существующий Ingress кластера
+  # Использование глобального кластерного Ingress
   ingress:
     enabled: true
     configureCertmanager: false
 
-  # Почта через SMTP Яндекса
+  # Настройки почтового шлюза SMTP Яндекс
   email:
     from: "${SMTP_USER}"
     display_name: "GitLab DevOps"
@@ -130,65 +180,58 @@ global:
     tls: true
     authentication: "login"
 
-  # НАСТРОЙКА ПОДКЛЮЧЕНИЯ К ВНЕШНЕЙ POSTGRESQL (infra)
+  # Интеграция с внешней СУБД PostgreSQL из пространства infra
   psql:
     host: "${DB_HOST}"
     port: 5432
-    # Имя базы и юзера чарт ожидает строками, но пароль строго через секрет
     database: "$(kubectl get secret "${SECRET_NAME}" -n "${NAMESPACE}" -o jsonpath='{.data.postgres-database}' | base64 --decode)"
     username: "$(kubectl get secret "${SECRET_NAME}" -n "${NAMESPACE}" -o jsonpath='{.data.postgres-username}' | base64 --decode)"
     password:
       secret: "${SECRET_NAME}"
       key: "postgres-password"
 
-  # НАСТРОЙКА ПОДКЛЮЧЕНИЯ К ВНЕШНЕМУ REDIS (infra)
+  # Интеграция с внешним Redis из пространства infra
   redis:
     host: "${REDIS_HOST}"
     port: 6379
-EOF
-
-# ИСПРАВЛЕНО: Корректная проверка флага существования пароля Redis
-if [ -n "$HAS_REDIS_PASS" ]; then
-cat <<EOF >> "$VALUES_FILE"
     password:
       secret: "${SECRET_NAME}"
       key: "redis-password"
-EOF
-fi
 
-# Дописываем блоки отключения зависимостей в values.yaml
-cat <<EOF >> "$VALUES_FILE"
+# Начальный пароль администратора (root) при первой инициализации
+echo:
+  initialRootPassword:
+    secret: "${SECRET_NAME}"
+    key: "gitlab-root-password"
 
-# Отключаем встроенную PostgreSQL
+# Отключаем встроенные зависимые стейтфул-компоненты чарта
 postgresql:
   install: false
 
-# Отключаем встроенный Redis
 redis:
   install: false
 
-# ПОЛНОСТЬЮ ОТКЛЮЧАЕМ встроенный Nginx Ingress Controller
 nginx-ingress:
   enabled: false
 
-# Выключаем встроенный cert-manager
 certmanager:
   install: false
 EOF
 
-# 8. Развертывание через Helm
-echo -e "${GREEN}Обновление репозиториев Helm...${NC}"
-# ИСПРАВЛЕНО: Указан правильный URL официального Helm-репозитория GitLab
-helm repo add gitlab https://charts.gitlab.io/
+# 5. Развертывание стека через Helm
+echo ""
+echo "[INFO] Синхронизация официального репозитория GitLab Helm..."
+helm repo add gitlab https://gitlab.io
 helm repo update
 
-echo -e "${GREEN}Запуск установки/обновления GitLab CE в неймспейс ${NAMESPACE}...${NC}"
-helm upgrade --install gitlab gitlab/gitlab-ce  \
-    --namespace ${NAMESPACE} \
+echo "[INFO] Запуск атомарной установки/обновления чарта gitlab/gitlab-ce..."
+helm upgrade --install gitlab gitlab/gitlab-ce \
+    --namespace "${NAMESPACE}" \
     --values "$VALUES_FILE"
 
-# Удаляем временный файл конфигурации
+# Удаляем временную конфигурацию
 rm -f "$VALUES_FILE"
 
-echo -e "${GREEN}=== Операция с GitLab CE успешно завершена! ===${NC}"
-echo -e "Следить за подом: ${YELLOW}kubectl get pods -n ${NAMESPACE} -w${NC}"
+echo ""
+echo "[SUCCESS] Операция с GitLab Community Edition успешно завершена!"
+echo "Для мониторинга подов используйте: kubectl get pods -n ${NAMESPACE} -w"

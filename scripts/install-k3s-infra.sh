@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Скрипт для настройки инфраструктуры (PostgreSQL 17 + Redis + pgAdmin 4) в k3s
+# Скрипт для настройки инфраструктуры (PostgreSQL 17 + Redis с паролем + pgAdmin 4) в k3s
 # С автоматическим пропуском генерации секретов, если они уже существуют.
 
 set -euo pipefail
@@ -67,16 +67,13 @@ SECRET_NAME="postgres-infra-secrets"
 NAMESPACE="infra"
 
 if kubectl get secret "$SECRET_NAME" -n "$NAMESPACE" &> /dev/null; then
-    echo "[INFO] Секрет '$SECRET_NAME' уже существует в namespace '$NAMESPACE'."
+    echo "[INFO] Секрет '$SECRET_NAME' уже существует in namespace '$NAMESPACE'."
     echo "[INFO] Пропускаем интерактивный ввод данных. Будут использованы текущие секреты."
     
-    # Извлекаем домен из существующего секрета для корректной подстановки в Ingress
-    # Так как в старом секрете домен не хранился, мы берем его из существующего Ingress, если он есть
     if kubectl get ingress pgadmin-ingress -n "$NAMESPACE" &> /dev/null; then
         PGADMIN_DOMAIN=$(kubectl get ingress pgadmin-ingress -n "$NAMESPACE" -o jsonpath='{.spec.rules[0].host}')
         echo "[INFO] Домен для pgAdmin автоматически определен как: $PGADMIN_DOMAIN"
     else
-        # Если секрет есть, но ингресса нет, спросим только домен
         printf '%s' "Секреты найдены, но Ingress не настроен. Введите доменное имя для pgAdmin: "
         if ! IFS= read -r PGADMIN_DOMAIN; then echo "[ERROR] Ошибка чтения."; exit 1; fi
     fi
@@ -95,7 +92,7 @@ else
     if ! IFS= read -r PGADMIN_DOMAIN; then echo "[ERROR] Не удалось прочитать доменное имя."; exit 1; fi
     if [ -z "$PGADMIN_DOMAIN" ] || (( ${#PGADMIN_DOMAIN} > 253 )) ||
         [[ ! "$PGADMIN_DOMAIN" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$ ]]; then
-        echo "[ERROR] Введите корректное доменное имя (DNS hostname)."; exit 1;
+        echo "[ERROR] Введите корректный доменное имя (DNS hostname)."; exit 1;
     fi
 
     echo ""
@@ -114,6 +111,11 @@ else
     echo "[Панель управления pgAdmin 4]"
     PGADMIN_PASS=$(get_or_gen_password "Каким образом задать пароль для входа в pgAdmin?")
 
+    # ИСПРАВЛЕНО: Добавлен интерактивный запрос пароля для Redis
+    echo ""
+    echo "[Инфраструктура Redis]"
+    REDIS_PASS=$(get_or_gen_password "Каким образом задать защитный пароль для Redis?")
+
     # Создаем секреты напрямую в кластере, только если их не было
     echo ""
     echo "[INFO] Создание безопасных секретов в Kubernetes..."
@@ -124,6 +126,7 @@ else
       --from-literal=gitlab-db-password="$GITLAB_DB_PASS" \
       --from-literal=gitlab-root-password="$GITLAB_ROOT_PASS" \
       --from-literal=pgadmin-password="$PGADMIN_PASS" \
+      --from-literal=redis-password="$REDIS_PASS" \
       --dry-run=client -o yaml | kubectl apply -f -
 fi
 
@@ -152,9 +155,19 @@ spec:
       containers:
       - name: redis
         image: redis:7-alpine
+        # ИСПРАВЛЕНО: Передаем пароль через аргумент запуска Redis
+        command: ["redis-server"]
+        args: ["--requirepass", "\$(REDIS_PASSWORD)"]
         ports:
         - containerPort: 6379
           name: redis
+        # ИСПРАВЛЕНО: Достаем защищенный пароль из Kubernetes Secret
+        env:
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-infra-secrets
+              key: redis-password
         resources:
           limits:
             memory: 512Mi
@@ -312,5 +325,5 @@ spec:
 EOF
 
 echo ""
-echo "[SUCCESS] Полный стек (PostgreSQL 17 + Redis + pgAdmin 4) применен!"
+echo "[SUCCESS] Полный стек (PostgreSQL 17 + Защищенный Redis + pgAdmin 4) применен!"
 echo "Адрес веб-интерфейса pgAdmin: http://$PGADMIN_DOMAIN"
