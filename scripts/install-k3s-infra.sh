@@ -206,8 +206,6 @@ spec:
       containers:
       - name: postgres
         image: postgres:17-alpine
-        command: ["postgres"]
-        args: ["-c", "max_locks_per_transaction=256", "-c", "shared_buffers=512MB"]
         ports:
         - containerPort: 5432
           name: postgres
@@ -217,6 +215,9 @@ spec:
             secretKeyRef:
               name: postgres-infra-secrets
               key: postgres-password
+        - name: POSTGRES_INITDB_ARGS
+          value: "--auth=scram-sha-256 -c max_locks_per_transaction=256 -c shared_buffers=512MB"
+       
         resources:
           limits:
             memory: 2Gi
