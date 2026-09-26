@@ -1,6 +1,6 @@
 #!/bin/bash
 # Модуль установки GitLab Community Edition (CE) в Namespace 'devops'
-# ИСПОЛЬЗУЮТСЯ ТОЛЬКО ЧИСТЫЕ KUBERNETES MANIFESTS (ЧЕРЕЗ CONFIGMAP)
+# Оптимизировано под k3s архитектуру и экономию RAM
 
 set -euo pipefail
 
@@ -11,10 +11,9 @@ RED='\033[0;31m'
 NC='\033[0m'
 
 echo "====================================================="
-echo "   Настройка GitLab CE через ConfigMap и Манифесты   "
+echo "   Настройка GitLab CE через ConfigMap для k3s       "
 echo "====================================================="
 
-# 1. Проверяем наличие утилит
 if ! command -v kubectl &> /dev/null; then
     echo "[ERROR] Утилита kubectl не найдена!"
     exit 1
@@ -28,14 +27,10 @@ INFRA_NS="infra"
 DB_HOST="postgres-infra-service.infra.svc.cluster.local"
 REDIS_HOST="redis-infra-service.infra.svc.cluster.local"
 
-# 2. Проверка и создание Namespace
-echo "[INFO] Проверка пространства имен '${NAMESPACE}'..."
 kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
 
-# 3. Синхронизация и генерация секретов
 if kubectl get secret "${SECRET_NAME}" -n "${NAMESPACE}" &> /dev/null; then
-    echo "[INFO] Секрет '${SECRET_NAME}' уже существует. Извлекаем данные..."
-    
+    echo "[INFO] Секрет '${SECRET_NAME}' существует. Извлекаем данные..."
     GITLAB_DOMAIN=$(kubectl get secret "${SECRET_NAME}" -n "${NAMESPACE}" -o jsonpath='{.data.gitlab-domain}' | base64 --decode)
     SMTP_USER=$(kubectl get secret "${SECRET_NAME}" -n "${NAMESPACE}" -o jsonpath='{.data.smtp-username}' | base64 --decode)
     SMTP_PASS=$(kubectl get secret "${SECRET_NAME}" -n "${NAMESPACE}" -o jsonpath='{.data.smtp-password}' | base64 --decode)
@@ -44,26 +39,21 @@ if kubectl get secret "${SECRET_NAME}" -n "${NAMESPACE}" &> /dev/null; then
     DB_PASS=$(kubectl get secret "${SECRET_NAME}" -n "${NAMESPACE}" -o jsonpath='{.data.postgres-password}' | base64 --decode)
     REDIS_PASS=$(kubectl get secret "${SECRET_NAME}" -n "${NAMESPACE}" -o jsonpath='{.data.redis-password}' | base64 --decode)
 else
-    echo "[INFO] Секреты не найдены. Запускается импорт данных из '${INFRA_NS}'..."
-    
+    echo "[INFO] Секреты не найдены. Импортируем из '${INFRA_NS}'..."
     printf '%s' "Введите базовый домен для GitLab (например, gitlab.lab): "
     if ! IFS= read -r GITLAB_DOMAIN; then echo "[ERROR] Ошибка чтения."; exit 1; fi
     GITLAB_DOMAIN=${GITLAB_DOMAIN:-"gitlab.lab"}
 
     if kubectl get secret "${INFRA_SECRET}" -n "${INFRA_NS}" &> /dev/null; then
-        echo "[INFO] Импортируем пароли СУБД и Redis..."
-        
         DB_USER="gitlab"
         DB_NAME="gitlabhq_production"
-        
         DB_PASS=$(kubectl get secret "${INFRA_SECRET}" -n "${INFRA_NS}" -o jsonpath='{.data.gitlab-db-password}' | base64 --decode)
         REDIS_PASS=$(kubectl get secret "${INFRA_SECRET}" -n "${INFRA_NS}" -o jsonpath='{.data.redis-password}' | base64 --decode)
         
-        printf '%s' "Введите email Яндекс для SMTP (например, user@yandex.ru): "
-        if ! IFS= read -r SMTP_USER; then echo "[ERROR] Ошибка чтения."; exit 1; fi
-        
-        printf '%s' "Введите пароль приложения Яндекс SMTP (символы скрыты): "
-        if ! IFS= read -r -s SMTP_PASS; then echo "[ERROR] Ошибка чтения."; exit 1; fi
+        printf '%s' "Введите email Яндекс для SMTP: "
+        if ! IFS= read -r SMTP_USER; then echo "[ERROR] Ошибка."; exit 1; fi
+        printf '%s' "Введите пароль приложения Яндекс SMTP: "
+        if ! IFS= read -r -s SMTP_PASS; then echo "[ERROR] Ошибка."; exit 1; fi
         printf '\n'
         
         kubectl create secret generic "$SECRET_NAME" \
@@ -77,13 +67,12 @@ else
           --from-literal=gitlab-domain="$GITLAB_DOMAIN" \
           --dry-run=client -o yaml | kubectl apply -f -
     else
-        echo "[ERROR] Секрет базы данных '${INFRA_SECRET}' в пространстве '${INFRA_NS}' не найден!"
+        echo "[ERROR] Секрет '${INFRA_SECRET}' не найден."
         exit 1
     fi
 fi
 
-# 4. Применяем конфигурацию и манифесты
-echo "[INFO] Применение манифестов GitLab CE в Kubernetes..."
+echo "[INFO] Применение манифестов GitLab CE..."
 
 kubectl apply -f - <<EOF
 apiVersion: v1
@@ -92,15 +81,12 @@ metadata:
   name: gitlab-config
   namespace: ${NAMESPACE}
 data:
-  # Наш вынесенный, чистый конфигурационный файл gitlab.rb
   gitlab.rb: |
     external_url 'http://${GITLAB_DOMAIN}'
     
-    # Отключение встроенных баз и кэша
     postgresql['enable'] = false
     redis['enable'] = false
     
-    # Настройка веб-сервера
     nginx['listen_port'] = 80
     nginx['listen_https'] = false
     
@@ -111,24 +97,39 @@ data:
     gitlab_rails['db_port'] = 5432
     gitlab_rails['db_username'] = '${DB_USER}'
     gitlab_rails['db_database'] = '${DB_NAME}'
-    gitlab_rails['db_password'] = '${DB_PASS}'
+    gitlab_rails['db_password'] = ENV['DB_PASSWORD']
     
     # Подключение к Redis (infra)
     gitlab_rails['redis_host'] = '${REDIS_HOST}'
     gitlab_rails['redis_port'] = 6379
-    gitlab_rails['redis_password'] = '${REDIS_PASS}'
+    gitlab_rails['redis_password'] = ENV['REDIS_PASSWORD']
     
     # Настройка SMTP Яндекс
     gitlab_rails['smtp_enable'] = true
     gitlab_rails['smtp_address'] = "smtp.yandex.ru"
     gitlab_rails['smtp_port'] = 465
-    gitlab_rails['smtp_user_name'] = "${SMTP_USER}"
-    gitlab_rails['smtp_password'] = "${SMTP_PASS}"
     gitlab_rails['smtp_tls'] = true
     gitlab_rails['smtp_verify_mode'] = "none"
     gitlab_rails['smtp_authentication'] = "login"
-    gitlab_rails['gitlab_email_from'] = "${SMTP_USER}"
-    gitlab_rails['gitlab_email_reply_to'] = "${SMTP_USER}"
+    gitlab_rails['smtp_user_name'] = ENV['SMTP_USER']
+    gitlab_rails['smtp_password'] = ENV['SMTP_PASSWORD']
+    gitlab_rails['gitlab_email_from'] = ENV['SMTP_USER']
+    gitlab_rails['gitlab_email_reply_to'] = ENV['SMTP_USER']
+
+    # ОПТИМИЗАЦИЯ ДЛЯ K3S (Зажимаем аппетиты Ruby под домашнюю лабу)
+    puma['worker_processes'] = 2
+    puma['min_threads'] = 2
+    puma['max_threads'] = 4
+    sidekiq['max_concurrency'] = 10
+    
+    # Отключаем тяжелый встроенный мониторинг, раз у нас k3s
+    prometheus_monitoring['enable'] = false
+    alertmanager['enable'] = false
+    node_exporter['enable'] = false
+    redis_exporter['enable'] = false
+    postgres_exporter['enable'] = false
+    gitlab_exporter['enable'] = false
+    grafana['enable'] = false
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -152,7 +153,6 @@ metadata:
     app: gitlab-ce
 spec:
   replicas: 1
-  # Стратегия Recreate решает проблему зависания ReadWriteOnce дисков
   strategy:
     type: Recreate
   selector:
@@ -171,20 +171,40 @@ spec:
           name: http
         - containerPort: 22
           name: ssh
+        env:
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: ${SECRET_NAME}
+              key: postgres-password
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: ${SECRET_NAME}
+              key: redis-password
+        - name: SMTP_USER
+          valueFrom:
+            secretKeyRef:
+              name: ${SECRET_NAME}
+              key: smtp-username
+        - name: SMTP_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: ${SECRET_NAME}
+              key: smtp-password
         resources:
+          # ИСПРАВЛЕНО: Снизили планку, чтобы k3s не зависал в ContainerCreating
           limits:
-            memory: 4Gi
+            memory: 3.5Gi
           requests:
-            memory: 2.5Gi
+            memory: 1.8Gi
         volumeMounts:
-        # Монтируем конфигурационный файл из ConfigMap прямо в /etc/gitlab
         - name: gitlab-config-volume
           mountPath: /etc/gitlab/gitlab.rb
           subPath: gitlab.rb
         - mountPath: /var/opt/gitlab
           name: gitlab-data
       volumes:
-      # Описываем том для конфига на базе ConfigMap
       - name: gitlab-config-volume
         configMap:
           name: gitlab-config
@@ -228,4 +248,4 @@ spec:
 EOF
 
 echo ""
-echo "[SUCCESS] GitLab CE успешно обновлен и переведен на схему с ConfigMap!"
+echo "[SUCCESS] Манифесты применены. Оптимизированный GitLab CE отправлен на запуск!"
