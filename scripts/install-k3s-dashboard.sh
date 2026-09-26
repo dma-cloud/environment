@@ -3,23 +3,36 @@
 # Скрипт для интерактивного развертывания актуальной версии Kubernetes Dashboard v3
 # Разработано в рамках инфраструктуры dma-cloud/environment
 
-set -e
+set -euo pipefail
 
 echo "====================================================="
 echo "      Развертывание Kubernetes Dashboard v3 в k3s    "
 echo "====================================================="
 
-# 1. Проверяем наличие kubectl
+# 1. Проверяем наличие необходимых утилит
 if ! command -v kubectl &> /dev/null; then
     echo "[ERROR] Утилита kubectl не найдена. Сначала установите k3s-master!"
     exit 1
 fi
 
+if ! command -v base64 &> /dev/null; then
+    echo "[ERROR] Утилита base64 не найдена."
+    exit 1
+fi
+
 # 2. Запрашиваем домен
-echo -n "Введите доменное имя для панели управления (например, k3s.lab): "
-read -r DASHBOARD_DOMAIN
+printf '%s' "Введите доменное имя для панели управления (например, k3s.lab): "
+if ! IFS= read -r DASHBOARD_DOMAIN; then
+    echo "[ERROR] Не удалось прочитать доменное имя."
+    exit 1
+fi
 if [ -z "$DASHBOARD_DOMAIN" ]; then
     echo "[ERROR] Домен не может быть пустым!"
+    exit 1
+fi
+if (( ${#DASHBOARD_DOMAIN} > 253 )) ||
+    [[ ! "$DASHBOARD_DOMAIN" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$ ]]; then
+    echo "[ERROR] Введите корректное доменное имя (DNS hostname)."
     exit 1
 fi
 
@@ -33,10 +46,16 @@ if kubectl get secret wildcard-lab-tls -n kubernetes-dashboard &>/dev/null; then
     echo "[INFO] Секрет 'wildcard-lab-tls' уже существует. Шаг пропущен."
 else
     if kubectl get secret wildcard-lab-tls -n infra &>/dev/null; then
-        kubectl get secret wildcard-lab-tls -n infra -o yaml | sed 's/namespace: infra/namespace: kubernetes-dashboard/' | kubectl apply -f -
+        kubectl create secret tls wildcard-lab-tls \
+            --namespace=kubernetes-dashboard \
+            --cert=<(kubectl get secret wildcard-lab-tls -n infra -o jsonpath='{.data.tls\.crt}' | base64 --decode) \
+            --key=<(kubectl get secret wildcard-lab-tls -n infra -o jsonpath='{.data.tls\.key}' | base64 --decode) \
+            --dry-run=client -o yaml | kubectl apply -f -
         echo "[INFO] TLS-секрет успешно скопирован."
     else
-        echo "[WARNING] Секрет 'wildcard-lab-tls' не найден в корневом пространстве 'infra'."
+        echo "[ERROR] Секрет 'wildcard-lab-tls' не найден в пространстве 'infra'."
+        echo "[ERROR] Сначала импортируйте TLS-сертификат через install-k3s-certs.sh."
+        exit 1
     fi
 fi
 
