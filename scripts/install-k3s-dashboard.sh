@@ -15,8 +15,8 @@ if ! command -v kubectl &> /dev/null; then
     exit 1
 fi
 
-# 2. Запрашиваем домен
-echo -n "Введите доменное имя для панели управления (например, dashboard.lab): "
+# 2. Запрашиваем домен (Без дефолтных значений)
+echo -n "Введите доменное имя для панели управления (например, k3s.lab): "
 read -r DASHBOARD_DOMAIN
 if [ -z "$DASHBOARD_DOMAIN" ]; then
     echo "[ERROR] Домен не может быть пустым!"
@@ -24,18 +24,24 @@ if [ -z "$DASHBOARD_DOMAIN" ]; then
 fi
 
 # 3. Создаем Namespace
-echo "[INFO] Создание пространства имен 'kubernetes-dashboard'..."
+echo "[INFO] Проверка и создание пространства имен 'kubernetes-dashboard'..."
 kubectl create namespace kubernetes-dashboard --dry-run=client -o yaml | kubectl apply -f -
 
-# 4. Копируем TLS Wildcard-сертификат из пространства infra
-if kubectl get secret wildcard-lab-tls -n infra &>/dev/null; then
-    kubectl get secret wildcard-lab-tls -n infra -o yaml | sed 's/namespace: infra/namespace: kubernetes-dashboard/' | kubectl apply -f -
+# 4. Проверка и синхронизация TLS Wildcard-сертификата
+echo "[INFO] Синхронизация SSL-сертификатов кластера..."
+if kubectl get secret wildcard-lab-tls -n kubernetes-dashboard &>/dev/null; then
+    echo "[INFO] Секрет 'wildcard-lab-tls' уже существует в пространстве 'kubernetes-dashboard'. Шаг пропущен."
 else
-    echo "[WARNING] Секрет 'wildcard-lab-tls' не найден в namespace 'infra'."
-    echo "Панель запустится, но браузер может ругаться на SSL-сертификат."
+    if kubectl get secret wildcard-lab-tls -n infra &>/dev/null; then
+        kubectl get secret wildcard-lab-tls -n infra -o yaml | sed 's/namespace: infra/namespace: kubernetes-dashboard/' | kubectl apply -f -
+        echo "[INFO] TLS-секрет успешно скопирован в пространство 'kubernetes-dashboard'."
+    else
+        echo "[WARNING] Секрет 'wildcard-lab-tls' не найден в корневом пространстве 'infra'."
+        echo "Панель запустится, но для работы HTTPS потребуется импортировать сертификаты."
+    fi
 fi
 
-# 5. Деплоим официальные манифесты Dashboard (версия v3.0, адаптированная под офлайн/кэш)
+# 5. Деплоим официальные манифесты Dashboard (v3.0, адаптированная под офлайн/кэш)
 echo "[INFO] Применение манифестов Kubernetes Dashboard..."
 
 kubectl apply -f - <<EOF
@@ -131,11 +137,13 @@ EOF
 echo ""
 echo "[INFO] Генерация токена доступа для входа в панель..."
 echo "-----------------------------------------------------------------"
-# Генерируем долгоживущий токен для администрирования кластера
-DASH_TOKEN=\$(kubectl -n kubernetes-dashboard create token admin-user --duration=8760h)
+
+# Генерируем токен напрямую в переменную сессии (чистое выполнение вне HERE-документов)
+DASH_TOKEN=$(kubectl -n kubernetes-dashboard create token admin-user --duration=8760h)
+
 echo "ВАШ ТОКЕН ДЛЯ ВХОДА (Скопируйте его целиком):"
 echo ""
-echo "\$DASH_TOKEN"
+echo "${DASH_TOKEN}"
 echo "-----------------------------------------------------------------"
 echo "[SUCCESS] Панель управления успешно развернута!"
-echo "Адрес: https://\$DASHBOARD_DOMAIN"
+echo "Адрес: https://${DASHBOARD_DOMAIN}"
