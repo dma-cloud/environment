@@ -1,6 +1,6 @@
 #!/bin/bash
 # Модуль установки GitLab Community Edition (CE) в Namespace 'devops'
-# ИСПОЛЬЗУЮТСЯ ТОЛЬКО ЧИСТЫЕ KUBERNETES MANIFESTS (БЕЗ HELM И SUBPATH БАГОВ)
+# ИСПОЛЬЗУЮТСЯ ЧИСТЫЕ KUBERNETES MANIFESTS БЕЗ HELM С ИСПРАВЛЕНИЕМ READ-ONLY FS
 
 set -euo pipefail
 
@@ -100,7 +100,7 @@ data:
   gitlab.rb: |
     external_url 'http://${GITLAB_DOMAIN}'
     
-    # Отключение встроенных баз и кэша (Твое ключевое требование)
+    # Отключение встроенных баз и кэша
     postgresql['enable'] = false
     redis['enable'] = false
     
@@ -134,13 +134,13 @@ data:
     gitlab_rails['gitlab_email_from'] = ENV['SMTP_USER']
     gitlab_rails['gitlab_email_reply_to'] = ENV['SMTP_USER']
 
-    # ОПТИМИЗАЦИЯ ДЛЯ КЛАСТЕРА K3S (Тюнинг лимитов под домашнюю лабораторную зону)
+    # ОПТИМИЗАЦИЯ ДЛЯ КЛАСТЕРА K3S (Тюнинг под домашнюю лабу)
     puma['worker_processes'] = 2
     puma['min_threads'] = 2
     puma['max_threads'] = 4
     sidekiq['max_concurrency'] = 10
     
-    # Отключение тяжелых встроенных экспортеров мониторинга ради экономии ресурсов хоста
+    # Отключение тяжелых встроенных экспортеров мониторинга ради экономии RAM/CPU
     prometheus_monitoring['enable'] = false
     alertmanager['enable'] = false
     node_exporter['enable'] = false
@@ -218,9 +218,12 @@ spec:
           requests:
             memory: 1.8Gi
         volumeMounts:
-        # ИСПРАВЛЕНО: Монтируем всю директорию ConfigMap целиком без использования subPath
+        # ИСПРАВЛЕНО И ОПТИМИЗИРОВАНО: Монтируем ТОЛЬКО ОДИН файл gitlab.rb. 
+        # Директория /etc/gitlab остается доступной для генерации SSH хост-ключей при первом старте.
         - name: gitlab-config-volume
-          mountPath: /etc/gitlab
+          mountPath: /etc/gitlab/gitlab.rb
+          subPath: gitlab.rb
+          readOnly: true
         - mountPath: /var/opt/gitlab
           name: gitlab-data
       volumes:
@@ -268,5 +271,5 @@ EOF
 
 echo ""
 echo -e "${GREEN}[SUCCESS] Манифесты успешно обновлены и применены в namespace '${NAMESPACE}'!${NC}"
-echo -e "Для отслеживания логов инициализации используй коду:"
+echo -e "Для отслеживания логов инициализации используй команду:"
 echo -e "${YELLOW}kubectl logs -n ${NAMESPACE} -l app=gitlab-ce -f${NC}"
