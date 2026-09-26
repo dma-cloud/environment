@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Скрипт для интерактивного развертывания Portainer CE в k3s
-# Разработано в рамках инфраструктуры dma-cloud/environment
+# Разработано в рамках infrastructure dma-cloud/environment
 
 set -euo pipefail
 
@@ -12,11 +12,6 @@ echo "====================================================="
 # 1. Проверяем наличие необходимых утилит
 if ! command -v kubectl &> /dev/null; then
     echo "[ERROR] Утилита kubectl не найдена. Сначала установите k3s-master!"
-    exit 1
-fi
-
-if ! command -v base64 &> /dev/null; then
-    echo "[ERROR] Утилита base64 не найдена."
     exit 1
 fi
 
@@ -35,20 +30,20 @@ fi
 echo "[INFO] Проверка и создание пространства имен 'portainer'..."
 kubectl create namespace portainer --dry-run=client -o yaml | kubectl apply -f -
 
-# 4. Проверка и синхронизация TLS Wildcard-сертификата
+# 4. Проверка и синхронизация TLS Wildcard-сертификата (Нативный надежный экспорт)
 echo "[INFO] Синхронизация SSL-сертификатов кластера..."
 if kubectl get secret wildcard-lab-tls -n portainer &>/dev/null; then
     echo "[INFO] Секрет 'wildcard-lab-tls' уже существует. Шаг пропущен."
 else
     if kubectl get secret wildcard-lab-tls -n infra &>/dev/null; then
-        kubectl create secret tls wildcard-lab-tls \
-            --namespace=portainer \
-            --cert=<(kubectl get secret wildcard-lab-tls -n infra -o jsonpath='{.data.['\''tls.crt'\'']}' | base64 --decode) \
-            --key=<(kubectl get secret wildcard-lab-tls -n infra -o jsonpath='{.data.['\''tls.key'\'']}' | base64 --decode) \
-            --dry-run=client -o yaml | kubectl apply -f -
+        # ИСПРАВЛЕНО: Чистый перенос объекта через sed без разбора jsonpath и base64
+        kubectl get secret wildcard-lab-tls -n infra -o yaml | \
+            sed 's/namespace: infra/namespace: portainer/' | \
+            kubectl apply -f -
         echo "[INFO] TLS-секрет успешно скопирован в пространство 'portainer'."
     else
         echo "[ERROR] Секрет 'wildcard-lab-tls' не найден в пространстве 'infra'."
+        echo "[ERROR] Сначала импортируйте TLS-сертификат через install-k3s-certs.sh."
         exit 1
     fi
 fi
@@ -77,7 +72,6 @@ spec:
       serviceAccountName: portainer-sa-admin
       containers:
       - name: portainer
-        # Официальный кэшируемый образ с Docker Hub
         image: docker.io/portainer/portainer-ce:latest
         ports:
         - containerPort: 9000
@@ -103,12 +97,12 @@ metadata:
   name: portainer-pvc
   namespace: portainer
 spec:
-  storageClassName: local-path  # Нарезаем место на LVM мастера
+  storageClassName: local-path
   accessModes:
     - ReadWriteOnce
   resources:
     requests:
-      storage: 10Gi             # 10 ГБ под внутренние данные панели с избытком
+      storage: 10Gi
 ---
 apiVersion: v1
 kind: Service
@@ -117,7 +111,7 @@ metadata:
   namespace: portainer
 spec:
   ports:
-  - port: 9000
+  - port: 80
     targetPort: 9000
     name: http
   selector:
@@ -140,13 +134,12 @@ spec:
           service:
             name: portainer-service
             port:
-              number: 9000
+              number: 80
   tls:
   - hosts:
     - $PORTAINER_DOMAIN
-    secretName: wildcard-lab-tls  # Полноценный HTTPS через ваш wildcard
+    secretName: wildcard-lab-tls
 ---
-# Авторизационные права: создаем ServiceAccount и связываем с админом кластера
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -170,4 +163,3 @@ EOF
 echo ""
 echo "[SUCCESS] Portainer CE успешно развернут!"
 echo "Адрес веб-интерфейса: https://${PORTAINER_DOMAIN}"
-echo "При первом входе система предложит вам задать пароль администратора."
