@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Скрипт для интерактивной настройки инфраструктуры (PostgreSQL 17 + Redis + pgAdmin 4) в k3s
-# Разработано в рамках инфраструктуры dma-cloud/environment
+# Скрипт для настройки инфраструктуры (PostgreSQL 17 + Redis + pgAdmin 4) в k3s
+# С автоматическим пропуском генерации секретов, если они уже существуют.
 
 set -euo pipefail
 
@@ -9,7 +9,7 @@ echo "====================================================="
 echo "   Настройка инфраструктурного стека (k3s: infra)    "
 echo "====================================================="
 
-# 1. Проверяем наличие kubectl
+# 1. Проверяем наличие утилит
 if ! command -v kubectl &> /dev/null; then
     echo "[ERROR] Утилита kubectl не найдена. Сначала установите k3s-master!"
     exit 1
@@ -58,70 +58,77 @@ get_or_gen_password() {
     fi
 }
 
-# 2. Интерактивный опрос пользователя (Без дефолтных значений)
-echo "[Настройка учетных данных pgAdmin 4]"
-printf '%s' "Введите Email администратора для входа в pgAdmin: "
-if ! IFS= read -r PGADMIN_EMAIL; then
-    echo "[ERROR] Не удалось прочитать Email."
-    exit 1
-fi
-if [ -z "$PGADMIN_EMAIL" ]; then
-    echo "[ERROR] Email не может быть пустым!"
-    exit 1
-fi
-if [[ ! "$PGADMIN_EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
-    echo "[ERROR] Введите корректный Email."
-    exit 1
-fi
-
-printf '%s' "Введите доменное имя для pgAdmin (например, pgadmin.lab): "
-if ! IFS= read -r PGADMIN_DOMAIN; then
-    echo "[ERROR] Не удалось прочитать доменное имя."
-    exit 1
-fi
-if [ -z "$PGADMIN_DOMAIN" ]; then
-    echo "[ERROR] Доменное имя не может быть пустым!"
-    exit 1
-fi
-if (( ${#PGADMIN_DOMAIN} > 253 )) ||
-    [[ ! "$PGADMIN_DOMAIN" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$ ]]; then
-    echo "[ERROR] Введите корректное доменное имя (DNS hostname)."
-    exit 1
-fi
-
-echo ""
-echo "[Инфраструктура PostgreSQL 17]"
-POSTGRES_PASS=$(get_or_gen_password "Каким образом задать главный пароль для СУБД (суперпользователь)?")
-
-echo ""
-echo "[База данных GitLab]"
-GITLAB_DB_PASS=$(get_or_gen_password "Каким образом задать пароль для базы данных GitLab?")
-
-echo ""
-echo "[Администратор GitLab]"
-GITLAB_ROOT_PASS=$(get_or_gen_password "Каким образом задать пароль root для веб-интерфейса GitLab?")
-
-echo ""
-echo "[Панель управления pgAdmin 4]"
-PGADMIN_PASS=$(get_or_gen_password "Каким образом задать пароль для входа в pgAdmin?")
-
-# 3. Создаем Namespace
-echo ""
+# 2. Проверка и создание Namespace (нужно сделать до проверки секретов)
 echo "[INFO] Проверка и создание пространства имен 'infra'..."
 kubectl create namespace infra --dry-run=client -o yaml | kubectl apply -f -
 
-# 4. Создаем секреты напрямую в кластере
-echo "[INFO] Создание безопасных секретов в Kubernetes..."
-kubectl create secret generic postgres-infra-secrets \
-  --namespace=infra \
-  --from-literal="pgadmin-email=$PGADMIN_EMAIL" \
-  --from-literal=postgres-password="$POSTGRES_PASS" \
-  --from-literal=gitlab-db-password="$GITLAB_DB_PASS" \
-  --from-literal=gitlab-root-password="$GITLAB_ROOT_PASS" \
-  --from-literal=pgadmin-password="$PGADMIN_PASS" \
-  --dry-run=client -o yaml | kubectl apply -f -
+# 3. Проверяем, существует ли уже секрет в кластере
+SECRET_NAME="postgres-infra-secrets"
+NAMESPACE="infra"
 
-# 5. Применяем манифест инфраструктуры (Переменные подставляются на лету)
+if kubectl get secret "$SECRET_NAME" -n "$NAMESPACE" &> /dev/null; then
+    echo "[INFO] Секрет '$SECRET_NAME' уже существует в namespace '$NAMESPACE'."
+    echo "[INFO] Пропускаем интерактивный ввод данных. Будут использованы текущие секреты."
+    
+    # Извлекаем домен из существующего секрета для корректной подстановки в Ingress
+    # Так как в старом секрете домен не хранился, мы берем его из существующего Ingress, если он есть
+    if kubectl get ingress pgadmin-ingress -n "$NAMESPACE" &> /dev/null; then
+        PGADMIN_DOMAIN=$(kubectl get ingress pgadmin-ingress -n "$NAMESPACE" -o jsonpath='{.spec.rules[0].host}')
+        echo "[INFO] Домен для pgAdmin автоматически определен как: $PGADMIN_DOMAIN"
+    else
+        # Если секрет есть, но ингресса нет, спросим только домен
+        printf '%s' "Секреты найдены, но Ingress не настроен. Введите доменное имя для pgAdmin: "
+        if ! IFS= read -r PGADMIN_DOMAIN; then echo "[ERROR] Ошибка чтения."; exit 1; fi
+    fi
+else
+    echo "[INFO] Секреты не найдены. Запускается процесс интерактивной настройки..."
+    echo ""
+    
+    # [Настройка учетных данных pgAdmin 4]
+    printf '%s' "Введите Email администратора для входа в pgAdmin: "
+    if ! IFS= read -r PGADMIN_EMAIL; then echo "[ERROR] Не удалось прочитать Email."; exit 1; fi
+    if [ -z "$PGADMIN_EMAIL" ] || [[ ! "$PGADMIN_EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+        echo "[ERROR] Введите корректный Email."; exit 1;
+    fi
+
+    printf '%s' "Введите доменное имя для pgAdmin (например, pgadmin.lab): "
+    if ! IFS= read -r PGADMIN_DOMAIN; then echo "[ERROR] Не удалось прочитать доменное имя."; exit 1; fi
+    if [ -z "$PGADMIN_DOMAIN" ] || (( ${#PGADMIN_DOMAIN} > 253 )) ||
+        [[ ! "$PGADMIN_DOMAIN" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$ ]]; then
+        echo "[ERROR] Введите корректное доменное имя (DNS hostname)."; exit 1;
+    fi
+
+    echo ""
+    echo "[Инфраструктура PostgreSQL 17]"
+    POSTGRES_PASS=$(get_or_gen_password "Каким образом задать главный пароль для СУБД (суперпользователь)?")
+
+    echo ""
+    echo "[База данных GitLab]"
+    GITLAB_DB_PASS=$(get_or_gen_password "Каким образом задать пароль для базы данных GitLab?")
+
+    echo ""
+    echo "[Администратор GitLab]"
+    GITLAB_ROOT_PASS=$(get_or_gen_password "Каким образом задать пароль root для веб-интерфейса GitLab?")
+
+    echo ""
+    echo "[Панель управления pgAdmin 4]"
+    PGADMIN_PASS=$(get_or_gen_password "Каким образом задать пароль для входа в pgAdmin?")
+
+    # Создаем секреты напрямую в кластере, только если их не было
+    echo ""
+    echo "[INFO] Создание безопасных секретов в Kubernetes..."
+    kubectl create secret generic "$SECRET_NAME" \
+      --namespace="$NAMESPACE" \
+      --from-literal="pgadmin-email=$PGADMIN_EMAIL" \
+      --from-literal=postgres-password="$POSTGRES_PASS" \
+      --from-literal=gitlab-db-password="$GITLAB_DB_PASS" \
+      --from-literal=gitlab-root-password="$GITLAB_ROOT_PASS" \
+      --from-literal=pgadmin-password="$PGADMIN_PASS" \
+      --dry-run=client -o yaml | kubectl apply -f -
+fi
+
+# 4. Применяем манифест инфраструктуры (Переменные подставляются на лету)
+echo ""
 echo "[INFO] Развертывание полного стека (SATA LVM / local-path)..."
 
 kubectl apply -f - <<EOF
@@ -305,7 +312,5 @@ spec:
 EOF
 
 echo ""
-echo "[SUCCESS] Полный стек (PostgreSQL 17 + Redis + pgAdmin 4) развернут!"
-echo "После запуска подов веб-интерфейс будет доступен по адресу: http://$PGADMIN_DOMAIN"
-echo "Для HTTPS настройте TLS в Ingress."
-echo "Логин: $PGADMIN_EMAIL"
+echo "[SUCCESS] Полный стек (PostgreSQL 17 + Redis + pgAdmin 4) применен!"
+echo "Адрес веб-интерфейса pgAdmin: http://$PGADMIN_DOMAIN"
